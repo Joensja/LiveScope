@@ -1,5 +1,5 @@
-# LiveScope
-# Dual Motor Control with "Largest Time Wins" Menus
+# LiveScope motor control
+# Dual Motor Control with menues to change settings
 
 This code demonstrates a dual-motor control system where:
 
