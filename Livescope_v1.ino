@@ -12,10 +12,13 @@ const int buzzerPin = 8;
 //   GLOBAL VARIABLES
 // ----------------------------------------------------------
 bool autoModeActive = false;
-int  targetPosition = 3;  // This will be set to 4 in auto mode below
-unsigned long buttonPressTime = 0;  // For activating auto mode (3s)
-
+int  targetPosition = 5;  // Default target position (changed to 5)
+unsigned long buttonPressTime = 0;  // For normal auto mode
 int currentDirection = 0; // +1 = forward, -1 = backward, 0 = off
+
+// For direct auto-läge
+static unsigned long directAutoPressTime = 0;
+static bool directAutoPressing = false;
 
 // ----------------------------------------------------------
 //   setMotorDirection(dir)
@@ -64,38 +67,92 @@ void loop() {
   bool sw1 = (digitalRead(rotSw1) == LOW);
   bool sw2 = (digitalRead(rotSw2) == LOW);
 
-  // Press both buttons >= 3s => activate auto mode
+  // 1) Check direct auto-läge (both pressed >=2s)
+  checkDirectAutoMode(sw1, sw2);
+
+  // 2) Check normal auto-läge (both pressed >=7s => setTargetPosition)
+  checkNormalAutoMode(sw1, sw2);
+
+  // Run either auto or manual
+  if (autoModeActive) {
+    runAutomaticMode();
+  } else {
+    runManualMode();
+  }
+}
+
+// ----------------------------------------------------------
+//   checkDirectAutoMode(sw1, sw2)
+//   - If BOTH are pressed >=2s => direct auto-läge
+//   - Skips setTargetPosition()
+// ----------------------------------------------------------
+void checkDirectAutoMode(bool sw1, bool sw2) {
+  if (autoModeActive) return; // already in auto mode
+
+  // if both are pressed
+  if (sw1 && sw2) {
+    if (!directAutoPressing) {
+      directAutoPressing = true;
+      directAutoPressTime = millis();
+    } else {
+      unsigned long held = millis() - directAutoPressTime;
+      if (held >= 2000) {
+        // Direct auto-läge
+        Serial.println("DIRECT AUTO MODE (2s both) => skipping setTargetPosition().");
+
+        tone(buzzerPin, 1000);
+        delay(1000);  // beep 1s
+        noTone(buzzerPin);
+
+        autoModeActive = true;
+        targetPosition = 5; // default 5
+        // Wait user release
+        while ((digitalRead(rotSw1) == LOW) && (digitalRead(rotSw2) == LOW)) {
+          // do nothing
+        }
+        // reset
+        directAutoPressing = false;
+        directAutoPressTime = 0;
+      }
+    }
+  }
+  else {
+    // not both => reset
+    directAutoPressing = false;
+    directAutoPressTime = 0;
+  }
+}
+
+// ----------------------------------------------------------
+//   checkNormalAutoMode(sw1, sw2)
+//   - If both pressed >=7s => normal auto-läge (with setTargetPosition)
+// ----------------------------------------------------------
+void checkNormalAutoMode(bool sw1, bool sw2) {
+  if (autoModeActive) return;  // already in auto mode
+
   if (sw1 && sw2) {
     if (buttonPressTime == 0) {
       buttonPressTime = millis();
     } 
-    else if ((millis() - buttonPressTime >= 3000) && !autoModeActive) {
-      // After 3s => auto mode
+    else if ((millis() - buttonPressTime >= 7000) && !autoModeActive) {
+      // after 7s => normal auto-läge
       tone(buzzerPin, 1000);
       delay(1000);  // 1s beep
       noTone(buzzerPin);
 
       autoModeActive = true;
-      targetPosition = 4;  // <--- Default changed to 4
-
-      // Wait until both buttons are released before entering menu
+      targetPosition = 5; // default 5
+      // wait until both are released
       while ((digitalRead(rotSw1) == LOW) && (digitalRead(rotSw2) == LOW)) {
         // do nothing
       }
 
-      setTargetPosition();  // let user adjust targetPosition if desired
+      // user can set targetPosition
+      setTargetPosition();
       buttonPressTime = 0;
     }
-  } 
-  else {
-    buttonPressTime = 0;
-  }
-
-  // Choose mode
-  if (autoModeActive) {
-    runAutomaticMode();
   } else {
-    runManualMode();
+    buttonPressTime = 0;
   }
 }
 
@@ -235,7 +292,7 @@ bool handleAutoButtons() {
     // first time we see a single button
     pressing = true;
     pressTime = millis();
-    // do not stop the motor here (no short press function)
+    // no short press action
   }
   else {
     // pressing == true
@@ -260,7 +317,7 @@ bool handleAutoButtons() {
 
 // ----------------------------------------------------------
 //   setTargetPosition()
-//   - user can set targetPosition (1..5) before auto mode
+//   - user can set targetPosition (1..7) before auto mode
 //   - hold one button >=1s => +1/-1
 //   - both => exit
 // ----------------------------------------------------------
@@ -284,7 +341,7 @@ void setTargetPosition() {
       while (digitalRead(rotSw1) == LOW) {
         if (digitalRead(rotSw2) == LOW) break; // both => abort
         if (millis() - start >= 1000) {
-          if (targetPosition < 5) targetPosition++;
+          if (targetPosition < 7) targetPosition++;  // max is 7 now
           beepMultiple(targetPosition);
           Serial.print("Target position increased to: ");
           Serial.println(targetPosition);
@@ -303,7 +360,7 @@ void setTargetPosition() {
       while (digitalRead(rotSw2) == LOW) {
         if (digitalRead(rotSw1) == LOW) break; // both => abort
         if (millis() - start >= 1000) {
-          if (targetPosition > 1) targetPosition--;
+          if (targetPosition > 1) targetPosition--;  // min is 1
           beepMultiple(targetPosition);
           Serial.print("Target position decreased to: ");
           Serial.println(targetPosition);
