@@ -31,8 +31,9 @@ unsigned long bothPressStart = 0;
 bool pressingAuto = false;
 unsigned long pressTimeAuto = 0;
 
-// Variabel för att reglera debug-utskrift av stoppad motor
+// Variabler för debounce och debug
 unsigned long lastStopPrintTime = 0;
+unsigned long lastPosSwPress = 0;  // För debounce av positionsbrytaren
 
 L298N myMotor(EN, IN1, IN2);
 
@@ -118,14 +119,12 @@ void runAutomaticMode() {
     while (posCount < targetPosition) {
       if (!handleAutoButtons()) return;
 
-      if (digitalRead(posSw) == LOW) {
-        delay(150);  
-        if (digitalRead(posSw) == LOW) {  
-          posCount++;
-          Serial.print("posCount (UP) = ");
-          Serial.println(posCount);
-          Serial.println("[DEBUG] posSw CLICKED - UP");
-        }
+      if (digitalRead(posSw) == LOW && millis() - lastPosSwPress > 150) {
+        lastPosSwPress = millis();  // Debounce
+        Serial.println("[DEBUG] posSw CLICKED - UP");
+        posCount++;
+        Serial.print("posCount (UP) = ");
+        Serial.println(posCount);
       }
     }
     stopAllMotors();
@@ -138,40 +137,18 @@ void runAutomaticMode() {
     while (posCount > 0) {
       if (!handleAutoButtons()) return;
 
-      if (digitalRead(posSw) == LOW) {
-        delay(150);  
-        if (digitalRead(posSw) == LOW) {  
-          posCount--;
-          Serial.print("posCount (DOWN) = ");
-          Serial.println(posCount);
-          Serial.println("[DEBUG] posSw CLICKED - DOWN");
-        }
+      if (digitalRead(posSw) == LOW && millis() - lastPosSwPress > 150) {
+        lastPosSwPress = millis();  // Debounce
+        Serial.println("[DEBUG] posSw CLICKED - DOWN");
+        posCount--;
+        Serial.print("posCount (DOWN) = ");
+        Serial.println(posCount);
       }
     }
     stopAllMotors();
     delay(1000);
   }
 }
-
-// ----------------------------
-//   CHANGELOG
-// ----------------------------
-/*
-# Changelog
-
-## Version: 1.1
-### Changes since the timing adjustments for auto mode, target position, and set speed:
-
-- **Debounce added to position switch** (`posSw`) to prevent double counting of position steps.
-- **Debug log added** to show when the position switch is triggered:  
-  - `"posSw CLICKED - UP"`  
-  - `"posSw CLICKED - DOWN"`
-- **Auto mode exit delay reduced** from **2000ms to 500ms**.
-- **Auto mode activation changed** from **3s hold to 1s double press**.
-- **Target position menu activation changed** from **5s to 3s hold**.
-- **Motor speed menu activation changed** from **7s to 5s hold**.
-- **Manual mode "STOP" debug message limited** to **once per second** to reduce spam.
-*/
 
 bool handleAutoButtons() {
   bool sw1 = (digitalRead(rotSw1) == LOW);
