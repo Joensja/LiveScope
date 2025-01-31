@@ -8,22 +8,25 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.testapp.ui.theme.TEstAppTheme
+import androidx.compose.ui.layout.ContentScale
+import com.example.testapp.ui.theme.TestAppTheme
 import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
-    // getDefaultAdapter är deprecierad, används för kompatibilitet med äldre enheter.
     private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
     private var bluetoothSocket: BluetoothSocket? = null
     private var outputStream: OutputStream? = null
@@ -34,7 +37,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            TEstAppTheme {
+            TestAppTheme {
                 BluetoothControlUI(
                     onSearchDevices = { searchBluetoothDevices() },
                     onConnect = { address -> connectToBluetooth(address) },
@@ -66,12 +69,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        bluetoothAdapter?.cancelDiscovery()
+
         try {
             val device: BluetoothDevice? = bluetoothAdapter?.getRemoteDevice(address)
             if (device != null) {
                 bluetoothSocket = device.createRfcommSocketToServiceRecord(serialUuid)
                 bluetoothSocket?.connect()
                 outputStream = bluetoothSocket?.outputStream
+                // Uppdatera UI-status här
             }
         } catch (e: SecurityException) {
             e.printStackTrace()
@@ -96,126 +102,134 @@ fun BluetoothControlUI(
     onConnect: (String) -> Unit,
     onSendCommand: (String) -> Unit
 ) {
-    var status by remember { mutableStateOf("Ej ansluten") }
+    var status by remember { mutableStateOf("Not Connected") }
     var devices by remember { mutableStateOf(emptyList<String>()) }
     var targetPosition by remember { mutableStateOf(45) } // Default to 45°
     var speed by remember { mutableStateOf(1) }
     var currentState by remember { mutableStateOf("Idle") }
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+        Image(
+            painter = painterResource(id = R.drawable.background_image),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .padding(top = 100.dp), // Flytta ner texten
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
             Text(
                 text = "White Lake Innovations",
-                fontSize = 24.sp,
                 fontWeight = FontWeight.Bold,
+                color = Color.White,
+                fontSize = 30.sp, // Större text
                 style = MaterialTheme.typography.headlineMedium
             )
             Text(
                 text = "Motorized Live Sonar",
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
                 fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
                 style = MaterialTheme.typography.bodyLarge
             )
             Spacer(modifier = Modifier.height(16.dp))
-            Text(text = "Status: $status", style = MaterialTheme.typography.headlineMedium)
-            Text(text = "State: $currentState", style = MaterialTheme.typography.bodyLarge)
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Button(modifier = Modifier.padding(top = 12.dp),onClick = { devices = onSearchDevices() }) {
-                Text(text = "Sök efter enheter")
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            devices.forEach { device ->
-                Button(onClick = {
-                    onConnect(device.split(" - ")[1])
-                    status = "Ansluten till $device"
-                    currentState = "Connected"
-                }) {
-                    Text(text = device)
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-
             Text(
-                text = "Kör motor manuellt",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Medium,
+                text = "Status: $status",
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                fontSize = 18.sp, // Samma storlek som "Motorized Live Sonar"
                 style = MaterialTheme.typography.bodyLarge
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                Button(onClick = { onSendCommand("LEFT") }) {
-                    Text(text = "Vänster")
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                Button(onClick = { onSendCommand("RIGHT") }) {
-                    Text(text = "Höger")
-                }
-            }
+            Text(
+                text = "State: $currentState",
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                fontSize = 18.sp, // Samma storlek som "Motorized Live Sonar"
+                style = MaterialTheme.typography.bodyLarge
+            )
             Spacer(modifier = Modifier.height(16.dp))
 
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                DropdownMenuWithLabel("Target Position", (1..7).map { "${it * 45}°" }, targetPosition) { selected ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                DropdownMenuWithLabel("Sweep", (1..7).map { "${it * 45}°" }, targetPosition) { selected ->
                     targetPosition = selected.toString().replace("°", "").toInt()
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    modifier = Modifier.align(Alignment.CenterVertically),
-                    onClick = {
-                        onSendCommand("SET POS $targetPosition")
-                        currentState = "Target Position Set"
-                    }) {
-                    Text(text = "Skicka")
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                DropdownMenuWithLabel("Hastighet", (1..9).toList(), speed) { selected ->
-                    speed = selected
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    modifier = Modifier.align(Alignment.CenterVertically),
-                    onClick = {
-                        onSendCommand("SET SPEED $speed")
-                        currentState = "Speed Set"
-                    }) {
-                    Text(text = "Skicka")
+                DropdownMenuWithLabel("Speed", (1..9).map { it.toString() }, speed) { selected ->
+                    speed = selected.toString().toInt()
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(onClick = {
-                onSendCommand("AUTO_MODE_ON")
-                currentState = "Automatic Mode Activated"
+                onSendCommand("SET POS $targetPosition SPEED $speed")
+                currentState = "Position and Speed Set"
             }) {
-                Text(text = "Aktivera automatisk drift")
+                Text(text = "Set Position and Speed", fontSize = 16.sp)
             }
+
             Spacer(modifier = Modifier.height(16.dp))
 
-            
-            }    }
+            Button(
+                onClick = {
+                    onSendCommand("AUTO_MODE_ON")
+                    currentState = "Automatic Mode Activated"
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF81C784)), // Mjukare grön färg
+                modifier = Modifier.padding(top = 30.dp) // Flytta upp knappen lite
+            ) {
+                Text(text = "Activate Auto Mode", fontSize = 16.sp)
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = {
+                    onSendCommand("AUTO_MODE_OFF")
+                    currentState = "Automatic Mode Deactivated"
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373)) // Mjukare röd färg
+            ) {
+                Text(text = "Deactivate Auto Mode", fontSize = 16.sp)
+            }
+        }
+    }
 }
 
 @Composable
 fun <T> DropdownMenuWithLabel(label: String, options: List<T>, selectedOption: T, onOptionSelected: (T) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(text = label, style = MaterialTheme.typography.bodyLarge)
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.width(IntrinsicSize.Min)
+    ) {
+        Text(text = label, style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold, color = Color.White))
         Spacer(modifier = Modifier.height(8.dp))
-        Button(onClick = { expanded = true }) {
-            Text(text = selectedOption.toString())
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { option ->
-                DropdownMenuItem(onClick = {
-                    onOptionSelected(option)
-                    expanded = false
-                }, text = {
-                    Text(text = option.toString())
-                })
+        Box {
+            Button(onClick = { expanded = true }) {
+                Text(text = selectedOption.toString() + if (label == "Sweep") "°" else "")
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.width(IntrinsicSize.Min)
+            ) {
+                options.forEach { option ->
+                    DropdownMenuItem(onClick = {
+                        onOptionSelected(option)
+                        expanded = false
+                    }, text = {
+                        Text(text = option.toString())
+                    })
+                }
             }
         }
     }
@@ -224,7 +238,7 @@ fun <T> DropdownMenuWithLabel(label: String, options: List<T>, selectedOption: T
 @Preview(showBackground = true)
 @Composable
 fun PreviewBluetoothControlUI() {
-    TEstAppTheme {
+    TestAppTheme {
         BluetoothControlUI({ emptyList() }, {}, {})
     }
 }
