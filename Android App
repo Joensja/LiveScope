@@ -1,0 +1,230 @@
+package com.example.testapp
+
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothSocket
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.testapp.ui.theme.TEstAppTheme
+import java.io.IOException
+import java.io.OutputStream
+import java.util.UUID
+
+class MainActivity : ComponentActivity() {
+    // getDefaultAdapter är deprecierad, används för kompatibilitet med äldre enheter.
+    private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
+    private var bluetoothSocket: BluetoothSocket? = null
+    private var outputStream: OutputStream? = null
+
+    private val serialUuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            TEstAppTheme {
+                BluetoothControlUI(
+                    onSearchDevices = { searchBluetoothDevices() },
+                    onConnect = { address -> connectToBluetooth(address) },
+                    onSendCommand = { command -> sendCommand(command) }
+                )
+            }
+        }
+    }
+
+    private fun searchBluetoothDevices(): List<String> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val permissionGranted = checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!permissionGranted) {
+                requestPermissions(arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT), 1)
+                return emptyList()
+            }
+        }
+
+        val pairedDevices: Set<BluetoothDevice>? = bluetoothAdapter?.bondedDevices
+        return pairedDevices?.map { "${it.name} - ${it.address}" } ?: emptyList()
+    }
+
+    private fun connectToBluetooth(address: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val permissionGranted = checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!permissionGranted) {
+                requestPermissions(arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT), 2)
+                return
+            }
+        }
+
+        try {
+            val device: BluetoothDevice? = bluetoothAdapter?.getRemoteDevice(address)
+            if (device != null) {
+                bluetoothSocket = device.createRfcommSocketToServiceRecord(serialUuid)
+                bluetoothSocket?.connect()
+                outputStream = bluetoothSocket?.outputStream
+            }
+        } catch (e: SecurityException) {
+            e.printStackTrace()
+        } catch (e: IOException) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun sendCommand(command: String) {
+        try {
+            outputStream?.write(command.toByteArray())
+            outputStream?.flush()
+        } catch (e: IOException) {
+            e.printStackTrace()
+        }
+    }
+}
+
+@Composable
+fun BluetoothControlUI(
+    onSearchDevices: () -> List<String>,
+    onConnect: (String) -> Unit,
+    onSendCommand: (String) -> Unit
+) {
+    var status by remember { mutableStateOf("Ej ansluten") }
+    var devices by remember { mutableStateOf(emptyList<String>()) }
+    var targetPosition by remember { mutableStateOf(45) } // Default to 45°
+    var speed by remember { mutableStateOf(1) }
+    var currentState by remember { mutableStateOf("Idle") }
+
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "White Lake Innovations",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.headlineMedium
+            )
+            Text(
+                text = "Motorized Live Sonar",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(text = "Status: $status", style = MaterialTheme.typography.headlineMedium)
+            Text(text = "State: $currentState", style = MaterialTheme.typography.bodyLarge)
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(modifier = Modifier.padding(top = 12.dp),onClick = { devices = onSearchDevices() }) {
+                Text(text = "Sök efter enheter")
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            devices.forEach { device ->
+                Button(onClick = {
+                    onConnect(device.split(" - ")[1])
+                    status = "Ansluten till $device"
+                    currentState = "Connected"
+                }) {
+                    Text(text = device)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Kör motor manuellt",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                Button(onClick = { onSendCommand("LEFT") }) {
+                    Text(text = "Vänster")
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Button(onClick = { onSendCommand("RIGHT") }) {
+                    Text(text = "Höger")
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                DropdownMenuWithLabel("Target Position", (1..7).map { "${it * 45}°" }, targetPosition) { selected ->
+                    targetPosition = selected.toString().replace("°", "").toInt()
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    modifier = Modifier.align(Alignment.CenterVertically),
+                    onClick = {
+                        onSendCommand("SET POS $targetPosition")
+                        currentState = "Target Position Set"
+                    }) {
+                    Text(text = "Skicka")
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                DropdownMenuWithLabel("Hastighet", (1..9).toList(), speed) { selected ->
+                    speed = selected
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    modifier = Modifier.align(Alignment.CenterVertically),
+                    onClick = {
+                        onSendCommand("SET SPEED $speed")
+                        currentState = "Speed Set"
+                    }) {
+                    Text(text = "Skicka")
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(onClick = {
+                onSendCommand("AUTO_MODE_ON")
+                currentState = "Automatic Mode Activated"
+            }) {
+                Text(text = "Aktivera automatisk drift")
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            
+            }    }
+}
+
+@Composable
+fun <T> DropdownMenuWithLabel(label: String, options: List<T>, selectedOption: T, onOptionSelected: (T) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = label, style = MaterialTheme.typography.bodyLarge)
+        Spacer(modifier = Modifier.height(8.dp))
+        Button(onClick = { expanded = true }) {
+            Text(text = selectedOption.toString())
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(onClick = {
+                    onOptionSelected(option)
+                    expanded = false
+                }, text = {
+                    Text(text = option.toString())
+                })
+            }
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun PreviewBluetoothControlUI() {
+    TEstAppTheme {
+        BluetoothControlUI({ emptyList() }, {}, {})
+    }
+}
