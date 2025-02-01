@@ -3,14 +3,14 @@
 #include <EEPROM.h>
 #include <SoftwareSerial.h> // Används för att hantera seriell kommunikation
 
-SoftwareSerial BTSerial(3, 4); // HC-05: TX på 3, RX på 4
-
-
+//SoftwareSerial BTserial(3, 2); // HC-05: TX på 3, RX på 4
+//SoftwareSerial BTserial(2, 3); // Now pin 2 and pin 3 of Arduino are Serial Rx & Tx pin Respectively
+SoftwareSerial BTserial(3, 2); // RX | TX
 // ----------------------------
 //   PIN CONFIGURATION
 // ----------------------------
-const int motorPin1 = 2;   
-const int motorPin2 = 4;   
+const int motorPin1 = 1;   
+const int motorPin2 = 1;   
 
 const int EN  = 9;   
 const int IN1 = 8;   
@@ -21,6 +21,9 @@ const int rotSw1  = 6;
 const int rotSw2  = 11;  
 
 const int buzzerPin = 10;
+const long baudRate = 38400;
+char c = ' ';
+boolean NL = true;
 
 // ----------------------------
 //   GLOBAL VARIABLES
@@ -56,23 +59,52 @@ void stopAllMotors();
 void beepMultiple(int n);
 void setTargetPosition();  // Nu deklarerad korrekt
 void updateDebounceTime(); 
-bool bleConnected = false;  // Global variabel för att hålla koll på Bluetooth-anslutning
+//bool bleConnected = false;  // Global variabel för att hålla koll på Bluetooth-anslutning
 
 
 void setup() {
-    Serial.begin(9600);
-    BTSerial.begin(9600);
+  /*Serial.begin(9600);
+  BTserial.begin(9600);
 
-    Serial.println("🔍 Startar HC-05 kontroll...");
-    BTSerial.println("HC-05 Check");
+  Serial.println("🔍 Startar test av HC-05...");
 
-    delay(1000);  // Vänta en kort stund för att HC-05 ska kunna svara
+  delay(4000);
+
+  Serial.println("Skickar 'AT' till HC-05...");
+  BTserial.println("AT"); // Skicka AT-kommando
+
+  delay(1000);
+
+  if (BTserial.available()) {  
+    Serial.println("✅ HC-05 svarar!");
+    while (BTserial.available()) {
+      Serial.write(BTserial.read()); // Skriv ut svaret från HC-05
+    }
+  } else {
+    Serial.println("❌ Ingen respons från HC-05!");
+  }
+  delay(4000);*/
+
+  Serial.print("BTserial started at ");
+   Serial.begin(9600);
+   Serial.print("Sketch:   ");   Serial.println(__FILE__);
+   Serial.print("Uploaded: ");   Serial.println(__DATE__);
+   Serial.println(" ");
+
+   BTserial.begin(baudRate);
+   Serial.print("BTserial started at "); 
+   Serial.println(baudRate);
+   //BTserial.print("BTserial started at "); 
+   //BTserial.println(baudRate);
+   Serial.println(" ");
+
+    delay(2000);  // Vänta en kort stund för att HC-05 ska kunna svara
 
     bool bleConnected = false;  // Först antar vi att den inte är ansluten
     unsigned long startTime = millis();  // Starttid för timeout
 
-    while (millis() - startTime < 1000) {  // Vänta max 3 sekunder på svar
-        if (BTSerial.available()) {  // Om vi får respons från HC-05
+    /*while (millis() - startTime < 3000) {  // Vänta max 3 sekunder på svar
+        if (BTserial.available()) {  // Om vi får respons från HC-05
             Serial.println("HC-05 svarar!");
             bleConnected = true;
             break;  // Avsluta loopen
@@ -81,13 +113,58 @@ void setup() {
 
     if (!bleConnected) {
         Serial.println("Ingen respons från HC-05!");
-    }
+    }*/
+while (!bleConnected) {  // 🛑 Körs tills HC-05 svarar
+        Serial.println("Skickar 'AT' till HC-05...");
+        BTserial.println("AT"); // Skicka AT-kommando
 
-    Serial.println("Fortsätter programkörning...");
+        unsigned long startTime = millis();  // Spara starttid
 
+        while (millis() - startTime < 3000) {  // Vänta max 3 sekunder på svar
+            if (BTserial.available()) {  
+                Serial.println("✅ HC-05 svarar!");
+                bleConnected = true; // 🔵 Sätt flaggan till ansluten
+
+                while (BTserial.available()) { 
+                    Serial.write(BTserial.read()); // Skriv ut svaret från HC-05
+                }
+                Serial.println("🎯 HC-05 ansluten! Fortsätter programmet...");
+                break;  // 🛑 Avsluta loopen
+            }
+        }
+
+        if (!bleConnected) {
+            Serial.println("❌ Ingen respons från HC-05! Försöker igen...");
+        }
+        if (BTserial.available())
+   {
+      c = BTserial.read();
+      Serial.write(c);
+   }
+
+   // Read from the Serial Monitor and send to the Bluetooth module
+   if (Serial.available())
+   {
+      c = Serial.read();
+      BTserial.write(c);
+
+      // Echo the user input to the main window. The ">" character indicates the user entered text.
+      if (NL)
+      {
+         Serial.print(">");
+         NL = false;
+      }
+      Serial.write(c);
+      if (c == 10)
+      {
+         NL = true;
+      }
+   }
+        delay(3000); // Vänta 3 sekunder innan nytt försök
+      }
     // Fortsätt programmet oavsett HC-05-status
     Serial.println("Fortsätter");
-    Serial.println("Resume");
+    //Serial.println("Resume");
 
     pinMode(motorPin1, OUTPUT);
     pinMode(motorPin2, OUTPUT);
@@ -111,8 +188,8 @@ void setup() {
 
     updateDebounceTime();
 
-    Serial.println("Bluetooth Ready...");
-    BTSerial.println("Bluetooth Ready...");
+    //Serial.println("Bluetooth Ready...");
+    BTserial.println("Bluetooth Ready...");
     Serial.print("Target position: ");
     Serial.println(targetPosition);
     Serial.print("Motor Saved speed: ");
@@ -125,6 +202,7 @@ void loop() {
   bool sw2 = (digitalRead(rotSw2) == LOW);
 
   checkBothLongestPress(sw1, sw2);
+
 
   if (autoModeActive) {
     runAutomaticMode();
@@ -140,14 +218,14 @@ Serial.println(digitalRead(rotSw2));
 delay(200);  // För att undvika att spamma seriell monitor
 
   // ✅ Läser Bluetooth-data
-  if (BTSerial.available()) {
-    char command = BTSerial.read();
+  if (BTserial.available()) {
+    char command = BTserial.read();
     handleBluetoothCommand(command);
     Serial.println("128");
   }
     // ✅ Kontrollera inkommande Bluetooth-data
-  if (BTSerial.available()) {
-    char command = BTSerial.read();
+  if (BTserial.available()) {
+    char command = BTserial.read();
     Serial.print("📶 Data från HC-05: ");
     Serial.println(command);  // Skriv ut vilken knapp som trycktes från appen
     handleBluetoothCommand(command);
@@ -226,20 +304,20 @@ void handleBluetoothCommand(char command) {
       myMotor.setSpeed(currentSpeed);
       myMotor.backward();
       Serial.println("[BT] Rotating Left");
-      BTSerial.println("Rotating Left");
+      BTserial.println("Rotating Left");
       break;
 
     case 'R':  // 🔄 Höger rotation
       myMotor.setSpeed(currentSpeed);
       myMotor.forward();
       Serial.println("[BT] Rotating Right");
-      BTSerial.println("Rotating Right");
+      BTserial.println("Rotating Right");
       break;
 
     case 'S':  // ⏹️ Stoppa motor
       myMotor.stop();
       Serial.println("[BT] Stopping Motor");
-      BTSerial.println("Stopping Motor");
+      BTserial.println("Stopping Motor");
       break;
 
     case '+':  // ⏫ Öka hastighet
@@ -248,8 +326,8 @@ void handleBluetoothCommand(char command) {
       EEPROM.write(0, currentSpeed);
       Serial.print("[BT] Increased Speed: ");
       Serial.println(currentSpeed);
-      BTSerial.print("Speed: ");
-      BTSerial.println(currentSpeed);
+      BTserial.print("Speed: ");
+      BTserial.println(currentSpeed);
       break;
 
     case '-':  // ⏬ Minska hastighet
@@ -258,26 +336,26 @@ void handleBluetoothCommand(char command) {
       EEPROM.write(0, currentSpeed);
       Serial.print("[BT] Decreased Speed: ");
       Serial.println(currentSpeed);
-      BTSerial.print("Speed: ");
-      BTSerial.println(currentSpeed);
+      BTserial.print("Speed: ");
+      BTserial.println(currentSpeed);
       break;
 
     case 'A':  // 🔄 Aktivera Auto Mode
       autoModeActive = true;
       Serial.println("[BT] Auto Mode Activated");
-      BTSerial.println("Auto Mode Activated");
+      BTserial.println("Auto Mode Activated");
       break;
 
     case 'M':  // ❌ Avbryt Auto Mode
       autoModeActive = false;
       stopAllMotors();
       Serial.println("[BT] Auto Mode Deactivated");
-      BTSerial.println("Auto Mode Deactivated");
+      BTserial.println("Auto Mode Deactivated");
       break;
 
     default:
       Serial.println("[BT] Unknown Command");
-      BTSerial.println("Unknown Command");
+      BTserial.println("Unknown Command");
       break;
   }
 }
