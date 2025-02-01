@@ -297,56 +297,54 @@ void setTargetPosition() {
     }
   }
 }
-
+// BLE commands needs to be checked so that they are handled the correct way in the different functions. Like right, left, auto etc
 void handleBluetoothCommand(char command) {
   switch (command) {
-    case 'L':  // 🔄 Vänster rotation
+    case 'L':  // 🔄 Left rotation
       myMotor.setSpeed(currentSpeed);
       myMotor.backward();
       Serial.println("[BT] Rotating Left");
       BTserial.println("Rotating Left");
       break;
 
-    case 'R':  // 🔄 Höger rotation
+    case 'R':  // 🔄 Right rotation
       myMotor.setSpeed(currentSpeed);
       myMotor.forward();
       Serial.println("[BT] Rotating Right");
       BTserial.println("Rotating Right");
       break;
 
-    case 'S':  // ⏹️ Stoppa motor
+    case 'S':  // ⏹️ Stop motor
       myMotor.stop();
       Serial.println("[BT] Stopping Motor");
       BTserial.println("Stopping Motor");
       break;
 
-    case '+':  // ⏫ Öka hastighet
-      currentSpeed = (currentSpeed >= 250) ? 250 : currentSpeed + 25;
+    case 'P':  // Set TargetPosition //Target Position is set via BLE with one command, not +/- as with the buttons. 
+      targetPosition = (P)
+      EEPROM.write(0, targetPosition);
+      Serial.print("New Target Position: ");
+      Serial.println(targetPosition);
+      beepMultiple(1);
+      break;
+
+    case 'H':  // Set Speed //Speed is set via BLE with one command, not +/- as with the buttons. 
+      currentSpeed = (H)
       myMotor.setSpeed(currentSpeed);
       EEPROM.write(0, currentSpeed);
-      Serial.print("[BT] Increased Speed: ");
+      Serial.print("[BT] Set Speed: ");
       Serial.println(currentSpeed);
       BTserial.print("Speed: ");
       BTserial.println(currentSpeed);
       break;
 
-    case '-':  // ⏬ Minska hastighet
-      currentSpeed = (currentSpeed <= 25) ? 25 : currentSpeed - 25;
-      myMotor.setSpeed(currentSpeed);
-      EEPROM.write(0, currentSpeed);
-      Serial.print("[BT] Decreased Speed: ");
-      Serial.println(currentSpeed);
-      BTserial.print("Speed: ");
-      BTserial.println(currentSpeed);
-      break;
-
-    case 'A':  // 🔄 Aktivera Auto Mode
+    case 'A':  // 🔄 Activate Auto Mode
       autoModeActive = true;
       Serial.println("[BT] Auto Mode Activated");
       BTserial.println("Auto Mode Activated");
       break;
 
-    case 'M':  // ❌ Avbryt Auto Mode
+    case 'M':  // ❌ Deactivate Auto Mode
       autoModeActive = false;
       stopAllMotors();
       Serial.println("[BT] Auto Mode Deactivated");
