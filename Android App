@@ -21,6 +21,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
 import com.example.testapp.ui.theme.TestAppTheme
 import java.io.IOException
 import java.io.OutputStream
@@ -105,8 +106,8 @@ fun BluetoothControlUI(
 ) {
     var status by remember { mutableStateOf("Not Connected") }
     var devices by remember { mutableStateOf(emptyList<String>()) }
-    var targetPosition by remember { mutableStateOf(45) } // Default to 45°
-    var speed by remember { mutableStateOf(1) }
+    var targetPosition by remember { mutableStateOf(180) } // Default to 180°
+    var speed by remember { mutableStateOf(5) }
     var currentState by remember { mutableStateOf("Idle") }
     var lastCommand by remember { mutableStateOf("") }  // 🔹 Senaste skickade kommandot
 
@@ -122,18 +123,31 @@ fun BluetoothControlUI(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp)
-                .padding(top = 100.dp),
+                .padding(top = 60.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Sweeping live scanning sonar",
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    fontSize = 26.sp,
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Divider(
+                    color = Color.White,  // Line color
+                    thickness = 4.dp,     // Line thickness
+                    modifier = Modifier
+                        .padding(top = 4.dp)  // Space between text and line
+                        .width(350.dp)        // Line width (adjust as needed)
+                )
+            }
+
             Text(
-                text = "White Lake Innovations",
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                fontSize = 30.sp,
-                style = MaterialTheme.typography.headlineMedium
-            )
-            Text(
-                text = "Motorized Live Sonar",
+                text = "Sweeping live scanning sonar",
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
                 fontSize = 18.sp,
@@ -141,14 +155,14 @@ fun BluetoothControlUI(
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Status: $status",
+                text = "Connection: $status",
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
                 fontSize = 18.sp,
                 style = MaterialTheme.typography.bodyLarge
             )
             Text(
-                text = "State: $currentState",
+                text = "Last button pressed: $currentState",
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
                 fontSize = 18.sp,
@@ -159,11 +173,11 @@ fun BluetoothControlUI(
             Text(
                 text = "Last Command: $lastCommand",
                 fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = Color.Black,
                 fontSize = 16.sp
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -177,7 +191,7 @@ fun BluetoothControlUI(
                     speed = selected.toString().toInt()
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            //Spacer(modifier = Modifier.height(3.dp))
 
             // 🔹 Knappen som skickar P och H samt uppdaterar lastCommand
             Button(
@@ -185,62 +199,72 @@ fun BluetoothControlUI(
                     val command = "P$targetPosition H$speed"
                     onSendCommand(command)
                     lastCommand = command  // 🔹 Uppdatera senaste skickade kommandot
-                    currentState = "Position and Speed Set"
+                    currentState = "Set sweep & Speed"
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64B5F6)) // Samma färg som Left & Right
             ) {
-                Text(text = "Set Position and Speed", fontSize = 16.sp)
+                Text(text = "Set Sweep and Speed", fontSize = 16.sp)
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            //Spacer(modifier = Modifier.height(1.dp))
 
             Button(
                 onClick = {
                     onSendCommand("A")
                     lastCommand = "A"  // 🔹 Uppdatera senaste skickade kommandot
-                    currentState = "Automatic Mode Activated"
+                    currentState = "Sweep Mode Activated"
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF81C784)) // Grön färg
             ) {
-                Text(text = "Activate Auto Mode", fontSize = 16.sp)
+                Text(text = "Activate Sweep Mode", fontSize = 16.sp)
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
+            //Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "When activating sweep mode it will turn left from it's current position\n" +
+                        " until it finds it's reference point. Max 45 degrees initial turn",
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodyLarge,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            //Spacer(modifier = Modifier.height(2.dp))
             Button(
                 onClick = {
                     onSendCommand("M")
                     lastCommand = "M"  // 🔹 Uppdatera senaste skickade kommandot
-                    currentState = "Automatic Mode Deactivated"
+                    currentState = "Sweep Deactivated"
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373)) // Röd färg
             ) {
-                Text(text = "Deactivate Auto Mode", fontSize = 16.sp)
+                Text(text = "Deactivate Sweep Mode", fontSize = 16.sp)
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(60.dp)) {
                 Button(
                     onClick = {
                         onSendCommand("L")
                         lastCommand = "L"  // 🔹 Uppdatera senaste skickade kommandot
-                        currentState = "Rotating Left"
+                        currentState = "Turning Left"
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64B5F6)) // Samma färg som Set Position
                 ) {
-                    Text(text = "Rotate Left", fontSize = 16.sp)
+                    Text(text = "Turn Left", fontSize = 16.sp)
                 }
 
                 Button(
                     onClick = {
                         onSendCommand("R")
                         lastCommand = "R"  // 🔹 Uppdatera senaste skickade kommandot
-                        currentState = "Rotating Right"
+                        currentState = "Turning Right"
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64B5F6)) // Samma färg som Set Position
                 ) {
-                    Text(text = "Rotate Right", fontSize = 16.sp)
+                    Text(text = "Turn Right", fontSize = 16.sp)
                 }
             }
         }
