@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <L298N.h>  
 #include <EEPROM.h>
+#include <SoftwareSerial.h> // Används för att hantera seriell kommunikation
+
+SoftwareSerial BTSerial(3, 4); // HC-05: TX på 3, RX på 4
 
 
 // ----------------------------
@@ -53,37 +56,69 @@ void stopAllMotors();
 void beepMultiple(int n);
 void setTargetPosition();  // Nu deklarerad korrekt
 void updateDebounceTime(); 
+bool bleConnected = false;  // Global variabel för att hålla koll på Bluetooth-anslutning
+
 
 void setup() {
-  pinMode(motorPin1, OUTPUT);
-  pinMode(motorPin2, OUTPUT);
-  pinMode(posSw,   INPUT_PULLUP);
-  pinMode(rotSw1,  INPUT_PULLUP);
-  pinMode(rotSw2,  INPUT_PULLUP);
-  pinMode(buzzerPin, OUTPUT);
+    Serial.begin(9600);
+    BTSerial.begin(9600);
 
-  digitalWrite(motorPin1, LOW);
-  digitalWrite(motorPin2, LOW);
+    Serial.println("🔍 Startar HC-05 kontroll...");
+    BTSerial.println("HC-05 Check");
 
- // Load last saved motor speed from EEPROM
-  int savedSpeed = EEPROM.read(0);  // Read value from address 0
-  if (savedSpeed >= 25 && savedSpeed <= 250) {  // Validate range
-    currentSpeed = savedSpeed;
-  } else {
-    currentSpeed = 125;  // Default if out of range
-  }
+    delay(1000);  // Vänta en kort stund för att HC-05 ska kunna svara
 
-  myMotor.setSpeed(currentSpeed);
-  myMotor.stop();
-  
-  updateDebounceTime();  // Uppdatera debounce vid start
+    bool bleConnected = false;  // Först antar vi att den inte är ansluten
+    unsigned long startTime = millis();  // Starttid för timeout
 
-  Serial.begin(9600);
-  Serial.println("Target position: ");
-  Serial.println(targetPosition);
-  Serial.println("Motor Saved speed: ");
-  Serial.println(currentSpeed);
+    while (millis() - startTime < 1000) {  // Vänta max 3 sekunder på svar
+        if (BTSerial.available()) {  // Om vi får respons från HC-05
+            Serial.println("HC-05 svarar!");
+            bleConnected = true;
+            break;  // Avsluta loopen
+        }
+    }
+
+    if (!bleConnected) {
+        Serial.println("Ingen respons från HC-05!");
+    }
+
+    Serial.println("Fortsätter programkörning...");
+
+    // Fortsätt programmet oavsett HC-05-status
+    Serial.println("Fortsätter");
+    Serial.println("Resume");
+
+    pinMode(motorPin1, OUTPUT);
+    pinMode(motorPin2, OUTPUT);
+    pinMode(posSw, INPUT_PULLUP);
+    pinMode(rotSw1, INPUT_PULLUP);
+    pinMode(rotSw2, INPUT_PULLUP);
+    pinMode(buzzerPin, OUTPUT);
+
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, LOW);
+
+    int savedSpeed = EEPROM.read(0);
+    if (savedSpeed >= 25 && savedSpeed <= 250) {
+        currentSpeed = savedSpeed;
+    } else {
+        currentSpeed = 125;
+    }
+
+    myMotor.setSpeed(currentSpeed);
+    myMotor.stop();
+
+    updateDebounceTime();
+
+    Serial.println("Bluetooth Ready...");
+    BTSerial.println("Bluetooth Ready...");
+    Serial.print("Target position: ");
+    Serial.println(targetPosition);
+    Serial.print("Motor Saved speed: ");
+    Serial.println(currentSpeed);
 }
+
 
 void loop() {
   bool sw1 = (digitalRead(rotSw1) == LOW);
@@ -96,6 +131,27 @@ void loop() {
   } else {
     runManualMode(sw1, sw2);
   }
+
+/*Serial.print("rotSw1: ");
+Serial.print(digitalRead(rotSw1));
+Serial.print("  rotSw2: ");
+Serial.println(digitalRead(rotSw2));
+*/
+delay(200);  // För att undvika att spamma seriell monitor
+
+  // ✅ Läser Bluetooth-data
+  if (BTSerial.available()) {
+    char command = BTSerial.read();
+    handleBluetoothCommand(command);
+    Serial.println("128");
+  }
+    // ✅ Kontrollera inkommande Bluetooth-data
+  if (BTSerial.available()) {
+    char command = BTSerial.read();
+    Serial.print("📶 Data från HC-05: ");
+    Serial.println(command);  // Skriv ut vilken knapp som trycktes från appen
+    handleBluetoothCommand(command);
+  }
 }
 
 // ----------------------------
@@ -103,6 +159,8 @@ void loop() {
 // ----------------------------
 void setTargetPosition() {
   Serial.println("** setTargetPosition MENU **");
+  Serial.print("Target Position: ");
+  Serial.println(targetPosition);
   stopAllMotors();
 
   bool exitMenu = false;
@@ -144,6 +202,14 @@ void setTargetPosition() {
       while (sw1 && sw2) {
         if (millis() - pressStart >= 1000) {
           Serial.println("Exiting setTargetPosition...");
+          beepMultiple(2);  // Exit confirmation
+
+          delay(2000);  // ✅ Add delay to prevent unintended single-clicks after exit
+          
+          // ✅ Wait until both buttons are fully released
+          while ((digitalRead(rotSw1) == LOW) || (digitalRead(rotSw2) == LOW)) {
+            // Do nothing, just wait
+          }
           exitMenu = true;
           break;
         }
@@ -153,6 +219,69 @@ void setTargetPosition() {
     }
   }
 }
+
+void handleBluetoothCommand(char command) {
+  switch (command) {
+    case 'L':  // 🔄 Vänster rotation
+      myMotor.setSpeed(currentSpeed);
+      myMotor.backward();
+      Serial.println("[BT] Rotating Left");
+      BTSerial.println("Rotating Left");
+      break;
+
+    case 'R':  // 🔄 Höger rotation
+      myMotor.setSpeed(currentSpeed);
+      myMotor.forward();
+      Serial.println("[BT] Rotating Right");
+      BTSerial.println("Rotating Right");
+      break;
+
+    case 'S':  // ⏹️ Stoppa motor
+      myMotor.stop();
+      Serial.println("[BT] Stopping Motor");
+      BTSerial.println("Stopping Motor");
+      break;
+
+    case '+':  // ⏫ Öka hastighet
+      currentSpeed = (currentSpeed >= 250) ? 250 : currentSpeed + 25;
+      myMotor.setSpeed(currentSpeed);
+      EEPROM.write(0, currentSpeed);
+      Serial.print("[BT] Increased Speed: ");
+      Serial.println(currentSpeed);
+      BTSerial.print("Speed: ");
+      BTSerial.println(currentSpeed);
+      break;
+
+    case '-':  // ⏬ Minska hastighet
+      currentSpeed = (currentSpeed <= 25) ? 25 : currentSpeed - 25;
+      myMotor.setSpeed(currentSpeed);
+      EEPROM.write(0, currentSpeed);
+      Serial.print("[BT] Decreased Speed: ");
+      Serial.println(currentSpeed);
+      BTSerial.print("Speed: ");
+      BTSerial.println(currentSpeed);
+      break;
+
+    case 'A':  // 🔄 Aktivera Auto Mode
+      autoModeActive = true;
+      Serial.println("[BT] Auto Mode Activated");
+      BTSerial.println("Auto Mode Activated");
+      break;
+
+    case 'M':  // ❌ Avbryt Auto Mode
+      autoModeActive = false;
+      stopAllMotors();
+      Serial.println("[BT] Auto Mode Deactivated");
+      BTSerial.println("Auto Mode Deactivated");
+      break;
+
+    default:
+      Serial.println("[BT] Unknown Command");
+      BTSerial.println("Unknown Command");
+      break;
+  }
+}
+
 // ----------------------------
 //   UPPDATERA DEBOUNCE BASERAT PÅ HASTIGHET (STEGVIS ÄNDRING)
 // ----------------------------
@@ -321,27 +450,29 @@ void runManualMode(bool sw1, bool sw2) {
 
 // TESTAR EN NY FUNKTION
 void checkBothLongestPress(bool sw1, bool sw2) {
-  static unsigned long lastUpdate = 0;  // Last time the hold time was printed
-  static unsigned long holdStartTime = 0;  // When the buttons were pressed
-  static bool releaseLogged = false;  // Prevents duplicate release messages
+  static unsigned long lastUpdate = 0;  // Tidpunkt för senaste loggning
+  static unsigned long holdStartTime = 0;  // När knapparna först trycktes
+  static unsigned long lastBeepTime = 0;   // Senaste tidpunkt för pip
+  static bool releaseLogged = false;  // Förhindrar duplicerade meddelanden
 
   if (!bothPressing && sw1 && sw2) {  
-    // If both buttons are pressed and were not already held
+    // Om båda knapparna trycks ner och inte redan hålls
     bothPressing = true;
-    holdStartTime = millis();  // Store press start time
-    lastUpdate = millis();  // Reset last print update
-    releaseLogged = false;  // Reset release flag
+    holdStartTime = millis();  // Starttid för tryck
+    lastUpdate = millis();  // Återställ senaste loggtid
+    lastBeepTime = millis(); // Starta pip-timer
+    releaseLogged = false;  // Återställ flagga
   } 
   else if (bothPressing && (!sw1 || !sw2)) {  
-    // If one or both buttons are released after being held
+    // Om en av knapparna släpps efter att ha hållits nere
     if (!releaseLogged) {  
-      // Only print once per release
-      unsigned long held = millis() - holdStartTime;  // Calculate hold duration
+      // Förhindrar att loggen skrivs flera gånger
+      unsigned long held = millis() - holdStartTime;  // Beräkna hålltid
       Serial.println("[DEBUG] Both buttons released. Timer reset.");
-      releaseLogged = true;  // Prevent duplicate prints
-      delay(50);  // Small delay to avoid bounce issues
+      releaseLogged = true;  // Förhindra duplicering
+      delay(50);  // Små fördröjningar för att undvika studsar
 
-      // Handle hold actions based on time
+      // Hantera åtgärder beroende på hur länge knappen hölls nere
       if (held >= 5000) {  
         Serial.println("[Auto] 5s => Entering Motor Speed Adjustment Mode (3 beeps)");
         beepMultiple(3);
@@ -358,17 +489,30 @@ void checkBothLongestPress(bool sw1, bool sw2) {
         autoModeActive = true;
       }
     }
-    bothPressing = false;  // Reset flag
+    bothPressing = false;  // Återställ flaggan
   } 
-  else if (bothPressing && millis() - lastUpdate >= 500) {  
-    // Every 500ms, update the counter and print
+  else if (bothPressing) {  
+    // Om knapparna hålls in fortsätter vi att kolla tiden
     unsigned long heldTime = millis() - holdStartTime;
-    Serial.print("[DEBUG] Held Time: ");
-    Serial.print(heldTime / 1000.0, 1);  // Convert to seconds with 1 decimal
-    Serial.println("s");
-    lastUpdate = millis();  // Update last print time
+    
+    // 📢 Lägger till ett pip varje sekund
+    if (millis() - lastBeepTime >= 1000) {  
+      tone(buzzerPin, 1000);
+      delay(100);
+      noTone(buzzerPin);
+      lastBeepTime = millis(); // Uppdatera senaste pip-tid
+    }
+
+    // Skriver ut hålltid i sekunder
+    if (millis() - lastUpdate >= 500) {  
+      Serial.print("[DEBUG] Held Time: ");
+      Serial.print(heldTime / 1000.0, 1);  // Konvertera till sekunder med 1 decimal
+      Serial.println("s");
+      lastUpdate = millis();  // Uppdatera senaste utskriftstid
+    }
   }
 }
+
 
 
 /*void checkBothLongestPress(bool sw1, bool sw2) {
@@ -451,7 +595,7 @@ void setMotorSpeed() {
           Serial.println("Exiting Motor Speed Adjustment Mode...");
           beepMultiple(2);  // Exit confirmation
 
-          delay(300);  // ✅ Add delay to prevent unintended single-clicks after exit
+          delay(2000);  // ✅ Add delay to prevent unintended single-clicks after exit
           
           // ✅ Wait until both buttons are fully released
           while ((digitalRead(rotSw1) == LOW) || (digitalRead(rotSw2) == LOW)) {
