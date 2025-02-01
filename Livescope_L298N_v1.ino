@@ -298,7 +298,7 @@ void setTargetPosition() {
   }
 }
 // BLE commands needs to be checked so that they are handled the correct way in the different functions. Like right, left, auto etc
-void handleBluetoothCommand(char command) {
+/*void handleBluetoothCommand(char command) {
   switch (command) {
     case 'L':  // 🔄 Left rotation
       myMotor.setSpeed(currentSpeed);
@@ -319,16 +319,18 @@ void handleBluetoothCommand(char command) {
       Serial.println("[BT] Stopping Motor");
       BTserial.println("Stopping Motor");
       break;
-
-    case 'P':  // Set TargetPosition //Target Position is set via BLE with one command, not +/- as with the buttons. 
+    // Set TargetPosition //Target Position is set via BLE with one command, not +/- as with the buttons. 
+    // Set Target will get a command that is P45 - P315. This is equialent to the steps for the targetposition. 45 = 2 and all the day up to the limit. 
+    case 'P':  
       targetPosition = (P)
       EEPROM.write(0, targetPosition);
       Serial.print("New Target Position: ");
       Serial.println(targetPosition);
       beepMultiple(1);
       break;
-
-    case 'H':  // Set Speed //Speed is set via BLE with one command, not +/- as with the buttons. 
+    // Set Speed //Speed is set via BLE with one command, not +/- as with the buttons. 
+    // Set speed will get a command like H1-9. 
+    case 'H':  
       currentSpeed = (H)
       myMotor.setSpeed(currentSpeed);
       EEPROM.write(0, currentSpeed);
@@ -352,6 +354,117 @@ void handleBluetoothCommand(char command) {
       break;
 
     default:
+      Serial.println("[BT] Unknown Command");
+      BTserial.println("Unknown Command");
+      break;
+  }
+}*/
+
+/*
+  handleBluetoothCommand(String command)
+
+  This function processes Bluetooth commands received from the app.
+  It interprets different commands such as rotation, speed, position, 
+  and mode activation.
+
+  Commands:
+  - 'L' = Rotate Left
+  - 'R' = Rotate Right
+  - 'S' = Stop Motor
+  - 'PXX' = Set Target Position (45-315 degrees converted to 2-8)
+  - 'H#' = Set Speed (1-9 converted to 25-250 PWM)
+  - 'A' = Activate Auto Mode
+  - 'M' = Deactivate Auto Mode
+
+  If invalid values are received, default values are used:
+  - Target Position defaults to **5** (if out of range)
+  - Speed defaults to **150** (if out of range)
+*/
+
+void handleBluetoothCommand(String command) {
+  if (command.length() == 0) return;  // Ensure command is not empty
+
+  char cmdType = command.charAt(0);  // Get first character (L, R, S, P, H, A, M)
+  String value = command.substring(1);  // Extract the remaining string
+
+  switch (cmdType) {
+    case 'L':  // 🔄 Rotate Left
+      myMotor.setSpeed(currentSpeed);
+      myMotor.backward();
+      Serial.println("[BT] Rotating Left");
+      BTserial.println("Rotating Left");
+      break;
+
+    case 'R':  // 🔄 Rotate Right
+      myMotor.setSpeed(currentSpeed);
+      myMotor.forward();
+      Serial.println("[BT] Rotating Right");
+      BTserial.println("Rotating Right");
+      break;
+
+    case 'S':  // ⏹️ Stop Motor
+      myMotor.stop();
+      Serial.println("[BT] Stopping Motor");
+      BTserial.println("Stopping Motor");
+      break;
+
+    case 'P':  // 🎯 Set Target Position (Convert to 2-8)
+      {
+        int receivedPos = value.toInt();  // Convert string to integer
+        int targetPosition = 5;  // Default value if an invalid position is received
+
+        // Convert received position (degrees) to targetPosition (2-8)
+        if (receivedPos == 45) targetPosition = 2;
+        else if (receivedPos == 90) targetPosition = 3;
+        else if (receivedPos == 135) targetPosition = 4;
+        else if (receivedPos == 180) targetPosition = 5;
+        else if (receivedPos == 225) targetPosition = 6;
+        else if (receivedPos == 270) targetPosition = 7;
+        else if (receivedPos == 315) targetPosition = 8;
+        else targetPosition = 5;  // If invalid, set to default (5)
+
+        EEPROM.write(0, targetPosition);  // Save to EEPROM
+        Serial.print("[BT] New Target Position: ");
+        Serial.println(targetPosition);
+        BTserial.print("Target Position: ");
+        BTserial.println(targetPosition);
+        beepMultiple(1);  // Give feedback with a short beep
+      }
+      break;
+
+    case 'H':  // ⚡ Set Speed (H1-H9 → 25-250)
+      {
+        int speedValue = value.toInt();  // Convert string to integer
+        int mappedSpeed = 150;  // Default value if an invalid speed is received
+
+        if (speedValue >= 1 && speedValue <= 9) {
+          mappedSpeed = map(speedValue, 1, 9, 25, 250); // Convert 1-9 to 25-250
+        }
+
+        currentSpeed = mappedSpeed;
+        myMotor.setSpeed(currentSpeed);
+        EEPROM.write(1, currentSpeed);  // Save speed to EEPROM
+        Serial.print("[BT] Set Speed: ");
+        Serial.println(currentSpeed);
+        BTserial.print("Speed: ");
+        BTserial.println(currentSpeed);
+      }
+      break;
+
+    case 'A':  // 🔄 Activate Auto Mode
+      autoModeActive = true;
+      Serial.println("[BT] Auto Mode Activated");
+      BTserial.println("Auto Mode Activated");
+      break;
+
+    case 'M':  // ❌ Deactivate Auto Mode
+      autoModeActive = false;
+      stopAllMotors();
+      Serial.println("[BT] Auto Mode Deactivated");
+      BTserial.println("Auto Mode Deactivated");
+      break;
+
+    default:  // ❌ Unknown command
       Serial.println("[BT] Unknown Command");
       BTserial.println("Unknown Command");
       break;
