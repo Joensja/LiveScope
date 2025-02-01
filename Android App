@@ -96,6 +96,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+
 @Composable
 fun BluetoothControlUI(
     onSearchDevices: () -> List<String>,
@@ -107,6 +108,7 @@ fun BluetoothControlUI(
     var targetPosition by remember { mutableStateOf(45) } // Default to 45°
     var speed by remember { mutableStateOf(1) }
     var currentState by remember { mutableStateOf("Idle") }
+    var lastCommand by remember { mutableStateOf("") }  // 🔹 Senaste skickade kommandot
 
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Image(
@@ -120,14 +122,14 @@ fun BluetoothControlUI(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp)
-                .padding(top = 100.dp), // Flytta ner texten
+                .padding(top = 100.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             Text(
                 text = "White Lake Innovations",
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
-                fontSize = 30.sp, // Större text
+                fontSize = 30.sp,
                 style = MaterialTheme.typography.headlineMedium
             )
             Text(
@@ -142,16 +144,25 @@ fun BluetoothControlUI(
                 text = "Status: $status",
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
-                fontSize = 18.sp, // Samma storlek som "Motorized Live Sonar"
+                fontSize = 18.sp,
                 style = MaterialTheme.typography.bodyLarge
             )
             Text(
                 text = "State: $currentState",
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
-                fontSize = 18.sp, // Samma storlek som "Motorized Live Sonar"
+                fontSize = 18.sp,
                 style = MaterialTheme.typography.bodyLarge
             )
+
+            // 🔹 Visar det senaste skickade kommandot
+            Text(
+                text = "Last Command: $lastCommand",
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                fontSize = 16.sp
+            )
+
             Spacer(modifier = Modifier.height(16.dp))
 
             Row(
@@ -168,10 +179,16 @@ fun BluetoothControlUI(
             }
             Spacer(modifier = Modifier.height(16.dp))
 
-            Button(onClick = {
-                onSendCommand("SET POS $targetPosition SPEED $speed")
-                currentState = "Position and Speed Set"
-            }) {
+            // 🔹 Knappen som skickar P och H samt uppdaterar lastCommand
+            Button(
+                onClick = {
+                    val command = "P$targetPosition H$speed"
+                    onSendCommand(command)
+                    lastCommand = command  // 🔹 Uppdatera senaste skickade kommandot
+                    currentState = "Position and Speed Set"
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64B5F6)) // Samma färg som Left & Right
+            ) {
                 Text(text = "Set Position and Speed", fontSize = 16.sp)
             }
 
@@ -179,11 +196,11 @@ fun BluetoothControlUI(
 
             Button(
                 onClick = {
-                    onSendCommand("AUTO_MODE_ON")
+                    onSendCommand("A")
+                    lastCommand = "A"  // 🔹 Uppdatera senaste skickade kommandot
                     currentState = "Automatic Mode Activated"
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF81C784)), // Mjukare grön färg
-                modifier = Modifier.padding(top = 30.dp) // Flytta upp knappen lite
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF81C784)) // Grön färg
             ) {
                 Text(text = "Activate Auto Mode", fontSize = 16.sp)
             }
@@ -192,16 +209,44 @@ fun BluetoothControlUI(
 
             Button(
                 onClick = {
-                    onSendCommand("AUTO_MODE_OFF")
+                    onSendCommand("M")
+                    lastCommand = "M"  // 🔹 Uppdatera senaste skickade kommandot
                     currentState = "Automatic Mode Deactivated"
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373)) // Mjukare röd färg
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373)) // Röd färg
             ) {
                 Text(text = "Deactivate Auto Mode", fontSize = 16.sp)
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                Button(
+                    onClick = {
+                        onSendCommand("L")
+                        lastCommand = "L"  // 🔹 Uppdatera senaste skickade kommandot
+                        currentState = "Rotating Left"
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64B5F6)) // Samma färg som Set Position
+                ) {
+                    Text(text = "Rotate Left", fontSize = 16.sp)
+                }
+
+                Button(
+                    onClick = {
+                        onSendCommand("R")
+                        lastCommand = "R"  // 🔹 Uppdatera senaste skickade kommandot
+                        currentState = "Rotating Right"
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF64B5F6)) // Samma färg som Set Position
+                ) {
+                    Text(text = "Rotate Right", fontSize = 16.sp)
+                }
             }
         }
     }
 }
+
 
 @Composable
 fun <T> DropdownMenuWithLabel(label: String, options: List<T>, selectedOption: T, onOptionSelected: (T) -> Unit) {
