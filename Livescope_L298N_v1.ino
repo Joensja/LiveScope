@@ -1,3 +1,74 @@
+/*
+=================================================================
+                         TABLE OF CONTENTS
+=================================================================
+1️⃣  INCLUDES & GLOBAL VARIABLES
+    - Libraries (L298N, EEPROM, SoftwareSerial)
+    - Pin configuration
+    - Global variables (speed settings, mode states, debounce timers, etc.)
+
+2️⃣  SETUP FUNCTION
+    - Initializes serial communication
+    - Loads speeds from EEPROM (manualSpeed & autoSpeed)
+    - Configures pin modes (motors, buttons, buzzer)
+    - Sets initial motor state
+    - Checks Bluetooth connection with HC-05
+
+3️⃣  MAIN LOOP (⚡ Core Execution)
+    - Reads button states (rotSw1, rotSw2)
+    - Prevents false single-clicks if double-click follows quickly
+    - Detects long-presses (checkBothLongestPress())
+    - Switches between Manual & Auto mode based on button input
+    - Runs the active mode:
+      - Auto Mode: `runAutomaticMode()`
+      - Manual Mode: `runManualMode()`
+    - Reads Bluetooth commands (`handleBluetoothCommand()`)
+    - Adds a **200ms delay** to avoid unnecessary processing load
+
+4️⃣  AUTO MODE FUNCTIONS (🔄 Automated Motor Movement)
+    - `runAutomaticMode()`       → Moves motor according to `targetPosition`
+    - `handleAutoButtons()`      → Detects if user wants to exit auto mode
+
+5️⃣  MANUAL MODE FUNCTIONS (🎛️ Manual Control)
+    - `runManualMode(sw1, sw2)`  → Moves motor manually
+    - `stopAllMotors()`          → Stops motor completely
+
+6️⃣  SPEED CONTROL FUNCTIONS (⚡ Adjusting Speeds)
+    - `setMotorSpeed()`          → Adjusts speed for **manual & auto** mode
+    - `saveSpeed()`              → **(EEPROM Optimization)** Saves only when changed
+    - `updateDebounceTime()`     → Adjusts button debounce time based on speed
+
+7️⃣  BUTTON PRESS FUNCTIONS (🎮 Button Press Detection)
+    - `checkBothLongestPress()`  → Detects long button holds
+      - 1s Hold → Switch to Auto Mode
+      - 3s Hold → Enter Target Position Menu
+      - 5s Hold → Enter Speed Adjustment Mode
+      - 8s Hold → **5s Continuous Beep & No Action**
+    - `setTargetPosition()`      → Adjusts auto mode sweep range
+
+8️⃣  BLUETOOTH FUNCTIONS (📡 Communication)
+    - `handleBluetoothCommand()` → Interprets HC-05 commands:
+      - 'L' → Rotate Left
+      - 'R' → Rotate Right
+      - 'S' → Stop Motor
+      - '+' / '-' → Change Manual Speed
+      - 'U' / 'D' → Change Auto Speed
+      - 'A' → Activate Auto Mode
+      - 'M' → Deactivate Auto Mode
+    - Bluetooth Initialization (`BTserial.begin()` and HC-05 checks)
+
+9️⃣  BEEP FUNCTIONS (🔊 Sound Alerts & Feedback)
+    - `beepMultiple()`           → Standard beeping function
+    - `beepMultipleDuration()`   → Custom duration for each beep
+    - `beepQuickDouble()`        → Two quick beeps (auto mode speed change)
+    - `beepLong()`               → One long beep (manual mode speed change)
+    - `beepMinMaxAlert()`        → **(NEW)** Beeps when speed reaches min/max
+    - `beepTriple()`             → Three quick beeps when switching mode
+
+=================================================================
+*/
+
+
 #include <Arduino.h>
 #include <L298N.h>  
 #include <EEPROM.h>
@@ -30,7 +101,9 @@ boolean NL = true;
 // ----------------------------
 bool autoModeActive   = false;
 int  targetPosition   = 7;    
-int  currentSpeed     = 125;   
+// int  currentSpeed     = 125;   // OLD default for speed
+int manualSpeed = 125;  // Default speed for manual mode
+int autoSpeed = 100;    // Default speed for auto mode
 
 bool bothPressing = false;
 unsigned long bothPressStart = 0;
@@ -61,141 +134,61 @@ void setTargetPosition();  // Nu deklarerad korrekt
 void updateDebounceTime(); 
 //bool bleConnected = false;  // Global variabel för att hålla koll på Bluetooth-anslutning
 
-
-void setup() {
-  /*Serial.begin(9600);
-  BTserial.begin(9600);
-
-  Serial.println("🔍 Startar test av HC-05...");
-
-  delay(4000);
-
-  Serial.println("Skickar 'AT' till HC-05...");
-  BTserial.println("AT"); // Skicka AT-kommando
-
-  delay(1000);
-
-  if (BTserial.available()) {  
-    Serial.println("✅ HC-05 svarar!");
-    while (BTserial.available()) {
-      Serial.write(BTserial.read()); // Skriv ut svaret från HC-05
-    }
-  } else {
-    Serial.println("❌ Ingen respons från HC-05!");
+void saveSpeed(int address, int &currentSpeed, int newSpeed) {
+  if (currentSpeed != newSpeed) {  // Only write if different
+    currentSpeed = newSpeed;       // Update variable
+    EEPROM.write(address, newSpeed);  // Save to EEPROM
+    Serial.print("[EEPROM] Speed Updated at address ");
+    Serial.print(address);  
+    Serial.print(": ");
+    Serial.println(newSpeed);
   }
-  delay(4000);*/
-
-  Serial.print("BTserial started at ");
-   Serial.begin(9600);
-   Serial.print("Sketch:   ");   Serial.println(__FILE__);
-   Serial.print("Uploaded: ");   Serial.println(__DATE__);
-   Serial.println(" ");
-
-   BTserial.begin(baudRate);
-   Serial.print("BTserial started at "); 
-   Serial.println(baudRate);
-   //BTserial.print("BTserial started at "); 
-   //BTserial.println(baudRate);
-   Serial.println(" ");
-
-    delay(2000);  // Vänta en kort stund för att HC-05 ska kunna svara
-
-    bool bleConnected = false;  // Först antar vi att den inte är ansluten
-    unsigned long startTime = millis();  // Starttid för timeout
-
-    /*while (millis() - startTime < 3000) {  // Vänta max 3 sekunder på svar
-        if (BTserial.available()) {  // Om vi får respons från HC-05
-            Serial.println("HC-05 svarar!");
-            bleConnected = true;
-            break;  // Avsluta loopen
-        }
-    }
-
-    if (!bleConnected) {
-        Serial.println("Ingen respons från HC-05!");
-    }*/
-while (!bleConnected) {  // 🛑 Körs tills HC-05 svarar
-        Serial.println("Skickar 'AT' till HC-05...");
-        BTserial.println("AT"); // Skicka AT-kommando
-
-        unsigned long startTime = millis();  // Spara starttid
-
-        while (millis() - startTime < 3000) {  // Vänta max 3 sekunder på svar
-            if (BTserial.available()) {  
-                Serial.println("✅ HC-05 svarar!");
-                bleConnected = true; // 🔵 Sätt flaggan till ansluten
-
-                while (BTserial.available()) { 
-                    Serial.write(BTserial.read()); // Skriv ut svaret från HC-05
-                }
-                Serial.println("🎯 HC-05 ansluten! Fortsätter programmet...");
-                break;  // 🛑 Avsluta loopen
-            }
-        }
-
-        if (!bleConnected) {
-            Serial.println("❌ Ingen respons från HC-05! Försöker igen...");
-        }
-        if (BTserial.available())
-   {
-      c = BTserial.read();
-      Serial.write(c);
-   }
-
-   // Read from the Serial Monitor and send to the Bluetooth module
-   if (Serial.available())
-   {
-      c = Serial.read();
-      BTserial.write(c);
-
-      // Echo the user input to the main window. The ">" character indicates the user entered text.
-      if (NL)
-      {
-         Serial.print(">");
-         NL = false;
-      }
-      Serial.write(c);
-      if (c == 10)
-      {
-         NL = true;
-      }
-   }
-        delay(3000); // Vänta 3 sekunder innan nytt försök
-      }
-    // Fortsätt programmet oavsett HC-05-status
-    Serial.println("Fortsätter");
-    //Serial.println("Resume");
-
-    pinMode(motorPin1, OUTPUT);
-    pinMode(motorPin2, OUTPUT);
-    pinMode(posSw, INPUT_PULLUP);
-    pinMode(rotSw1, INPUT_PULLUP);
-    pinMode(rotSw2, INPUT_PULLUP);
-    pinMode(buzzerPin, OUTPUT);
-
-    digitalWrite(motorPin1, LOW);
-    digitalWrite(motorPin2, LOW);
-
-    int savedSpeed = EEPROM.read(0);
-    if (savedSpeed >= 25 && savedSpeed <= 250) {
-        currentSpeed = savedSpeed;
-    } else {
-        currentSpeed = 125;
-    }
-
-    myMotor.setSpeed(currentSpeed);
-    myMotor.stop();
-
-    updateDebounceTime();
-
-    //Serial.println("Bluetooth Ready...");
-    BTserial.println("Bluetooth Ready...");
-    Serial.print("Target position: ");
-    Serial.println(targetPosition);
-    Serial.print("Motor Saved speed: ");
-    Serial.println(currentSpeed);
 }
 
+void setup() {
+  Serial.begin(9600);
+  BTserial.begin(9600);
+
+  pinMode(motorPin1, OUTPUT);
+  pinMode(motorPin2, OUTPUT);
+  pinMode(posSw, INPUT_PULLUP);
+  pinMode(rotSw1, INPUT_PULLUP);
+  pinMode(rotSw2, INPUT_PULLUP);
+  pinMode(buzzerPin, OUTPUT);
+
+  digitalWrite(motorPin1, LOW);
+  digitalWrite(motorPin2, LOW);
+
+  // Load last saved speeds from EEPROM
+  int savedManualSpeed = EEPROM.read(0);  
+  int savedAutoSpeed = EEPROM.read(1);
+
+  if (savedManualSpeed >= 25 && savedManualSpeed <= 250) {
+      manualSpeed = savedManualSpeed;
+  } else {
+      manualSpeed = 125;
+  }
+
+  if (savedAutoSpeed >= 25 && savedAutoSpeed <= 250) {
+      autoSpeed = savedAutoSpeed;
+  } else {
+      autoSpeed = 100;
+  }
+
+  myMotor.setSpeed(manualSpeed);
+  myMotor.stop();
+
+  updateDebounceTime();
+
+  //Serial.println("Bluetooth Ready...");
+  BTserial.println("Bluetooth Ready...");
+  Serial.print("Target position: ");
+  Serial.println(targetPosition);
+  Serial.print("Manual Saved speed: ");
+  Serial.println(manualSpeed);
+  Serial.print("Auto Saved speed: ");
+  Serial.println(autoSpeed);  
+}
 
 void loop() {
   bool sw1 = (digitalRead(rotSw1) == LOW);
@@ -210,30 +203,11 @@ void loop() {
     runManualMode(sw1, sw2);
   }
 
-/*Serial.print("rotSw1: ");
-Serial.print(digitalRead(rotSw1));
-Serial.print("  rotSw2: ");
-Serial.println(digitalRead(rotSw2));
-*/
-delay(200);  // För att undvika att spamma seriell monitor
-
-  // ✅ Läser Bluetooth-data
-  if (BTserial.available()) {
-    char command = BTserial.read();
-    handleBluetoothCommand(command);
-    Serial.println("128");
-  }
-    // ✅ Kontrollera inkommande Bluetooth-data
-  if (BTserial.available()) {
-    char command = BTserial.read();
-    Serial.print("📶 Data från HC-05: ");
-    Serial.println(command);  // Skriv ut vilken knapp som trycktes från appen
-    handleBluetoothCommand(command);
-  }
+  delay(200);  // För att undvika att spamma seriell monitor
 }
 
 // ----------------------------
-//   FIXAD SETTARGETPOSITION()
+//   SWEEPING DEGREE
 // ----------------------------
 void setTargetPosition() {
   Serial.println("** setTargetPosition MENU **");
@@ -297,56 +271,71 @@ void setTargetPosition() {
     }
   }
 }
-// BLE commands needs to be checked so that they are handled the correct way in the different functions. Like right, left, auto etc
-/*void handleBluetoothCommand(char command) {
+
+void handleBluetoothCommand(char command) {
   switch (command) {
-    case 'L':  // 🔄 Left rotation
-      myMotor.setSpeed(currentSpeed);
+    case 'L':  
+      myMotor.setSpeed(manualSpeed);
       myMotor.backward();
       Serial.println("[BT] Rotating Left");
       BTserial.println("Rotating Left");
       break;
 
-    case 'R':  // 🔄 Right rotation
-      myMotor.setSpeed(currentSpeed);
+    case 'R':  
+      myMotor.setSpeed(manualSpeed);
       myMotor.forward();
       Serial.println("[BT] Rotating Right");
       BTserial.println("Rotating Right");
       break;
 
-    case 'S':  // ⏹️ Stop motor
+    case 'S':  
       myMotor.stop();
       Serial.println("[BT] Stopping Motor");
       BTserial.println("Stopping Motor");
       break;
-    // Set TargetPosition //Target Position is set via BLE with one command, not +/- as with the buttons. 
-    // Set Target will get a command that is P45 - P315. This is equialent to the steps for the targetposition. 45 = 2 and all the day up to the limit. 
-    case 'P':  
-      targetPosition = (P)
-      EEPROM.write(0, targetPosition);
-      Serial.print("New Target Position: ");
-      Serial.println(targetPosition);
-      beepMultiple(1);
-      break;
-    // Set Speed //Speed is set via BLE with one command, not +/- as with the buttons. 
-    // Set speed will get a command like H1-9. 
-    case 'H':  
-      currentSpeed = (H)
-      myMotor.setSpeed(currentSpeed);
-      EEPROM.write(0, currentSpeed);
-      Serial.print("[BT] Set Speed: ");
-      Serial.println(currentSpeed);
-      BTserial.print("Speed: ");
-      BTserial.println(currentSpeed);
+
+    case '+':  // ⏫ Increase Manual Speed
+      saveSpeed(0, manualSpeed, min(manualSpeed + 25, 250));  // Prevent exceeding 250
+      myMotor.setSpeed(manualSpeed);
+      Serial.print("[BT] Increased Manual Speed: ");
+      Serial.println(manualSpeed);
+      BTserial.print("Manual Speed: ");
+      BTserial.println(manualSpeed);
       break;
 
-    case 'A':  // 🔄 Activate Auto Mode
+    case '-':  // ⏬ Decrease Manual Speed
+      saveSpeed(0, manualSpeed, max(manualSpeed - 25, 25));  // Prevent going below 25
+      myMotor.setSpeed(manualSpeed);
+      Serial.print("[BT] Decreased Manual Speed: ");
+      Serial.println(manualSpeed);
+      BTserial.print("Manual Speed: ");
+      BTserial.println(manualSpeed);
+      break;
+
+    case 'U':  // ⏫ Increase Auto Speed
+      saveSpeed(1, autoSpeed, min(autoSpeed + 25, 250));  // Prevent exceeding 250
+      Serial.print("[BT] Increased Auto Speed: ");
+      Serial.println(autoSpeed);
+      BTserial.print("Auto Speed: ");
+      BTserial.println(autoSpeed);
+      break;
+
+    case 'D':  // ⏬ Decrease Auto Speed
+      saveSpeed(1, autoSpeed, max(autoSpeed - 25, 25));  // Prevent going below 25
+      Serial.print("[BT] Decreased Auto Speed: ");
+      Serial.println(autoSpeed);
+      BTserial.print("Auto Speed: ");
+      BTserial.println(autoSpeed);
+      break;
+
+
+    case 'A':  
       autoModeActive = true;
       Serial.println("[BT] Auto Mode Activated");
       BTserial.println("Auto Mode Activated");
       break;
 
-    case 'M':  // ❌ Deactivate Auto Mode
+    case 'M':  
       autoModeActive = false;
       stopAllMotors();
       Serial.println("[BT] Auto Mode Deactivated");
@@ -358,129 +347,12 @@ void setTargetPosition() {
       BTserial.println("Unknown Command");
       break;
   }
-}*/
-
-/*
-  handleBluetoothCommand(String command)
-
-  This function processes Bluetooth commands received from the app.
-  It interprets different commands such as rotation, speed, position, 
-  and mode activation.
-
-  Commands:
-  - 'L' = Rotate Left
-  - 'R' = Rotate Right
-  - 'S' = Stop Motor
-  - 'PXX' = Set Target Position (45-315 degrees converted to 2-8)
-  - 'H#' = Set Speed (1-9 converted to 25-250 PWM)
-  - 'A' = Activate Auto Mode
-  - 'M' = Deactivate Auto Mode
-
-  If invalid values are received, default values are used:
-  - Target Position defaults to **5** (if out of range)
-  - Speed defaults to **150** (if out of range)
-*/
-
-void handleBluetoothCommand(String command) {
-  if (command.length() == 0) return;  // Ensure command is not empty
-
-  char cmdType = command.charAt(0);  // Get first character (L, R, S, P, H, A, M)
-  String value = command.substring(1);  // Extract the remaining string
-
-  switch (cmdType) {
-    case 'L':  // 🔄 Rotate Left
-      myMotor.setSpeed(currentSpeed);
-      myMotor.backward();
-      Serial.println("[BT] Rotating Left");
-      BTserial.println("Rotating Left");
-      break;
-
-    case 'R':  // 🔄 Rotate Right
-      myMotor.setSpeed(currentSpeed);
-      myMotor.forward();
-      Serial.println("[BT] Rotating Right");
-      BTserial.println("Rotating Right");
-      break;
-
-    case 'S':  // ⏹️ Stop Motor
-      myMotor.stop();
-      Serial.println("[BT] Stopping Motor");
-      BTserial.println("Stopping Motor");
-      break;
-
-    case 'P':  // 🎯 Set Target Position (Convert to 2-8)
-      {
-        int receivedPos = value.toInt();  // Convert string to integer
-        int targetPosition = 5;  // Default value if an invalid position is received
-
-        // Convert received position (degrees) to targetPosition (2-8)
-        if (receivedPos == 45) targetPosition = 2;
-        else if (receivedPos == 90) targetPosition = 3;
-        else if (receivedPos == 135) targetPosition = 4;
-        else if (receivedPos == 180) targetPosition = 5;
-        else if (receivedPos == 225) targetPosition = 6;
-        else if (receivedPos == 270) targetPosition = 7;
-        else if (receivedPos == 315) targetPosition = 8;
-        else targetPosition = 5;  // If invalid, set to default (5)
-
-        EEPROM.write(0, targetPosition);  // Save to EEPROM
-        Serial.print("[BT] New Target Position: ");
-        Serial.println(targetPosition);
-        BTserial.print("Target Position: ");
-        BTserial.println(targetPosition);
-        beepMultiple(1);  // Give feedback with a short beep
-      }
-      break;
-
-    case 'H':  // ⚡ Set Speed (H1-H9 → 25-250)
-      {
-        int speedValue = value.toInt();  // Convert string to integer
-        int mappedSpeed = 150;  // Default value if an invalid speed is received
-
-        if (speedValue >= 1 && speedValue <= 9) {
-          mappedSpeed = map(speedValue, 1, 9, 25, 250); // Convert 1-9 to 25-250
-        }
-
-        currentSpeed = mappedSpeed;
-        myMotor.setSpeed(currentSpeed);
-        EEPROM.write(1, currentSpeed);  // Save speed to EEPROM
-        Serial.print("[BT] Set Speed: ");
-        Serial.println(currentSpeed);
-        BTserial.print("Speed: ");
-        BTserial.println(currentSpeed);
-      }
-      break;
-
-    case 'A':  // 🔄 Activate Auto Mode
-      autoModeActive = true;
-      Serial.println("[BT] Auto Mode Activated");
-      BTserial.println("Auto Mode Activated");
-      break;
-
-    case 'M':  // ❌ Deactivate Auto Mode
-      autoModeActive = false;
-      stopAllMotors();
-      Serial.println("[BT] Auto Mode Deactivated");
-      BTserial.println("Auto Mode Deactivated");
-      break;
-
-    default:  // ❌ Unknown command
-      Serial.println("[BT] Unknown Command");
-      BTserial.println("Unknown Command");
-      break;
-  }
 }
 
 // ----------------------------
-//   UPPDATERA DEBOUNCE BASERAT PÅ HASTIGHET (STEGVIS ÄNDRING)
+//   SOMETHING FO THE FUTURE OF DEBOUNCE
 // ----------------------------
 void updateDebounceTime() {
-  // Linear equation: posSwDebounceTime = a * currentSpeed + b
-  /*float a = (200.0 - 600.0) / (250.0 - 25.0);  // a = -400 / 225
-  float b = 600.0 - a * 25.0;                 // b = 600 - (-1.777 * 25)
-
-  unsigned long newDebounceTime = a * currentSpeed + b;  // Calculate new debounce
-*/
   unsigned long newDebounceTime = 450;
   // Only print if debounce time changes
   static unsigned long lastDebounceTime = 0;
@@ -494,22 +366,8 @@ void updateDebounceTime() {
   posSwDebounceTime = newDebounceTime;  // Apply new debounce time
 }
 
-/*void updateDebounceTime() {
-  // Linjär ekvation: posSwDebounceTime = a * currentSpeed + b
-  // Vid speed = 25 -> debounce = 600ms
-  // Vid speed = 250 -> debounce = 200ms
-  float a = (200.0 - 600.0) / (250.0 - 25.0);  // a = -400 / 225
-  float b = 600.0 - a * 25.0;                 // b = 600 - (-1.777 * 25)
-
-  posSwDebounceTime = a * currentSpeed + b;  // Linjär formel
-
-  Serial.print("[System] Updated debounce time: ");
-  Serial.print(posSwDebounceTime);
-  Serial.println("ms");
-}*/
-
 // ----------------------------
-//   AUTO MODE (LAGT TILL)
+//   AUTO SWEEP MODE
 // ----------------------------
 void runAutomaticMode() {
   Serial.println("[Auto] Starting...");
@@ -519,7 +377,7 @@ void runAutomaticMode() {
   delay(1000);
 
   Serial.println("Going backward until posSw=LOW...");
-  myMotor.setSpeed(currentSpeed);
+  myMotor.setSpeed(autoSpeed);
   myMotor.backward();
 
   while (digitalRead(posSw) == HIGH) {
@@ -531,7 +389,7 @@ void runAutomaticMode() {
 
   while (autoModeActive) {
     Serial.println("Pendling UP...");
-    myMotor.setSpeed(currentSpeed);
+    myMotor.setSpeed(autoSpeed);
     myMotor.forward();
 
     while (posCount < targetPosition) {
@@ -549,7 +407,7 @@ void runAutomaticMode() {
     delay(1000);
 
     Serial.println("Pendling DOWN...");
-    myMotor.setSpeed(currentSpeed);
+    myMotor.setSpeed(autoSpeed);
     myMotor.backward();
 
     while (posCount > 0) {
@@ -576,7 +434,7 @@ void runManualMode(bool sw1, bool sw2) {
   static unsigned long lastPrintTime = 0;  // Timestamp to limit printing frequency
 
   if (sw1 && !sw2) {
-    myMotor.setSpeed(currentSpeed);
+    myMotor.setSpeed(manualSpeed);
     myMotor.forward();
 
     if (lastState != 1 && millis() - lastPrintTime >= 1000) {  // Only print every 1s if state changed
@@ -585,10 +443,11 @@ void runManualMode(bool sw1, bool sw2) {
       lastPrintTime = millis();
     }
     
-    updateDebounceTime();  // Ensure debounce updates if speed changes
+    //Dont think this is needed, leaves here for now
+    //updateDebounceTime();  // Ensure debounce updates if speed changes
 
   } else if (!sw1 && sw2) {
-    myMotor.setSpeed(currentSpeed);
+    myMotor.setSpeed(manualSpeed);
     myMotor.backward();
 
     if (lastState != 2 && millis() - lastPrintTime >= 1000) {  // Only print every 1s if state changed
@@ -610,200 +469,227 @@ void runManualMode(bool sw1, bool sw2) {
   }
 }
 
-/*void runManualMode(bool sw1, bool sw2) {
-  if (sw1 && !sw2) {
-    myMotor.setSpeed(currentSpeed);
-    myMotor.forward();
-    Serial.println("[Manual] Motor B => FORWARD");
-    updateDebounceTime();  // Se till att debounce uppdateras om hastigheten ändras
-  } else if (!sw1 && sw2) {
-    myMotor.setSpeed(currentSpeed);
-    myMotor.backward();
-    Serial.println("[Manual] Motor B => BACKWARD");
-    updateDebounceTime();
-  } else {
-    myMotor.stop();
-    
-    if (millis() - lastStopPrintTime >= 1000) {
-      Serial.println("[Manual] Motor B => STOP");
-      lastStopPrintTime = millis();
-    }
-  }
-}
-*/
 // ----------------------------
 //   CHECK BUTTON LONG PRESS
 // ----------------------------
 // Detects if both rotation switches are held for a long duration.
 // Different actions are triggered based on how long both buttons are held.
 
-// TESTAR EN NY FUNKTION
 void checkBothLongestPress(bool sw1, bool sw2) {
-  static unsigned long lastUpdate = 0;  // Tidpunkt för senaste loggning
-  static unsigned long holdStartTime = 0;  // När knapparna först trycktes
-  static unsigned long lastBeepTime = 0;   // Senaste tidpunkt för pip
-  static bool releaseLogged = false;  // Förhindrar duplicerade meddelanden
+  static unsigned long lastUpdate = 0;  // Last log update timestamp
+  static unsigned long holdStartTime = 0;  // When the buttons were first pressed
+  static unsigned long lastBeepTime = 0;   // Last beep timestamp
+  static bool releaseLogged = false;  // Prevents duplicate log messages
+  static bool longPressTriggered = false; // Prevents multiple activations for 8s hold
+  static unsigned long firstPressTime = 0; // Timestamp for the first button press
+  static bool waitingForSecondPress = false; // Indicates if waiting for second button press
+
+  if (!bothPressing && (sw1 || sw2)) {  
+    // First button press detected, start timing
+    firstPressTime = millis();
+    waitingForSecondPress = true;
+  }
+
+  if (waitingForSecondPress && (sw1 && sw2)) {
+    // If the second button is pressed within 150ms, prevent single press registration
+    if (millis() - firstPressTime < 150) {
+      Serial.println("[INFO] Single press ignored due to quick second press.");
+      waitingForSecondPress = false;
+    }
+  }
 
   if (!bothPressing && sw1 && sw2) {  
-    // Om båda knapparna trycks ner och inte redan hålls
+    // If both buttons are pressed and were not already held
     bothPressing = true;
-    holdStartTime = millis();  // Starttid för tryck
-    lastUpdate = millis();  // Återställ senaste loggtid
-    lastBeepTime = millis(); // Starta pip-timer
-    releaseLogged = false;  // Återställ flagga
+    holdStartTime = millis();  // Store press start time
+    lastUpdate = millis();  // Reset last log timestamp
+    lastBeepTime = millis(); // Start beep timer
+    releaseLogged = false;  // Reset flag
+    longPressTriggered = false; // Reset long hold flag
+    waitingForSecondPress = false; // Reset waiting flag
   } 
   else if (bothPressing && (!sw1 || !sw2)) {  
-    // Om en av knapparna släpps efter att ha hållits nere
-    if (!releaseLogged) {  
-      // Förhindrar att loggen skrivs flera gånger
-      unsigned long held = millis() - holdStartTime;  // Beräkna hålltid
+    // If one button is released after being held down
+    if (!releaseLogged && !longPressTriggered) {  
+      unsigned long held = millis() - holdStartTime;  // Calculate hold duration
       Serial.println("[DEBUG] Both buttons released. Timer reset.");
-      releaseLogged = true;  // Förhindra duplicering
-      delay(50);  // Små fördröjningar för att undvika studsar
+      releaseLogged = true;  // Prevent duplication
+      delay(50);  // Small delay to avoid bouncing
 
-      // Hantera åtgärder beroende på hur länge knappen hölls nere
-      if (held >= 5000) {  
-        Serial.println("[Auto] 5s => Entering Motor Speed Adjustment Mode (3 beeps)");
-        beepMultiple(3);
+      // ✅ 8-second hold => 5-second continuous beep, no action on release
+      if (held >= 8000) {  
+        Serial.println("[WARNING] 8s Hold Detected! 5s Continuous Beep!");
+        tone(buzzerPin, 1000);  // Start continuous beep for 5s
+        delay(5000);
+        noTone(buzzerPin);  // Stop beep
+        longPressTriggered = true; // Prevent further actions
+      }
+      else if (held >= 5000) {  
+        Serial.println("[Auto] 5s => Entering Motor Speed Adjustment Mode (3 fast beeps)");
+        beepMultipleDuration(3, 100); // Three short beeps
         setMotorSpeed();  
       } 
       else if (held >= 3000) {  
         Serial.println("[Auto] 3s => Set Target Position (2 beeps)");
-        beepMultiple(2);
+        beepMultipleDuration(2, 200); // Two beeps
         setTargetPosition();
       } 
       else if (held >= 1000) {  
         Serial.println("[Auto] 1s => Activating Auto Mode (1 beep)");
-        beepMultiple(1);
+        beepMultipleDuration(1, 300); // One beep
         autoModeActive = true;
       }
     }
-    bothPressing = false;  // Återställ flaggan
+    bothPressing = false;  // Reset flag
+
+    // ✅ Ensure buttons are fully released before continuing
+    while (digitalRead(rotSw1) == LOW || digitalRead(rotSw2) == LOW) {
+      delay(10);
+    }
   } 
   else if (bothPressing) {  
-    // Om knapparna hålls in fortsätter vi att kolla tiden
+    // If buttons are held down, continue checking time
     unsigned long heldTime = millis() - holdStartTime;
     
-    // 📢 Lägger till ett pip varje sekund
-    if (millis() - lastBeepTime >= 1000) {  
+    // 📢 Add a beep every second unless it's in the 8s hold state
+    if (heldTime < 8000 && millis() - lastBeepTime >= 1000) {  
       tone(buzzerPin, 1000);
       delay(100);
       noTone(buzzerPin);
-      lastBeepTime = millis(); // Uppdatera senaste pip-tid
+      lastBeepTime = millis();
     }
 
-    // Skriver ut hålltid i sekunder
+    // Print held time in seconds
     if (millis() - lastUpdate >= 500) {  
       Serial.print("[DEBUG] Held Time: ");
-      Serial.print(heldTime / 1000.0, 1);  // Konvertera till sekunder med 1 decimal
+      Serial.print(heldTime / 1000.0, 1);  // Convert to seconds with 1 decimal
       Serial.println("s");
-      lastUpdate = millis();  // Uppdatera senaste utskriftstid
+      lastUpdate = millis();
     }
   }
 }
 
-
-
-/*void checkBothLongestPress(bool sw1, bool sw2) {
-  if (!bothPressing && sw1 && sw2) {  
-    // If both buttons are pressed and were not already held
-    bothPressing = true;
-    bothPressStart = millis();  // Store the time the press started
-  } 
-  else if (bothPressing && (!sw1 || !sw2)) {  
-    // If one or both buttons are released after being held
-    unsigned long held = millis() - bothPressStart;  // Calculate hold duration
-    bothPressing = false;  // Reset flag
-
-    // 5s hold -> Open Motor Speed Adjustment Menu
-    if (held >= 5000) {  
-      Serial.println("[Auto] 5s => Entering Motor Speed Adjustment Mode (3 beeps)");
-      beepMultiple(3);  // 3 beeps for confirmation
-      setMotorSpeed();  // Call new function
-    } 
-
-    // 3s hold -> Open Set Target Position Menu
-    else if (held >= 3000) {  
-      Serial.println("[Auto] 3s => Set Target Position (5 beeps)");
-      beepMultiple(5);  // 5 beeps for confirmation
-      setTargetPosition();
-    } 
-    
-    // 1s hold -> Activate Auto Mode
-    else if (held >= 1000) {  
-      Serial.println("[Auto] 1s => Activating Auto Mode (1 beep)");
-      beepMultiple(1);  // 1 beep for confirmation
-      autoModeActive = true;
-    }
-  }
-}*/
 // ----------------------------
-//   SET MOTOR SPEED
+//   SET MOTOR SPEED (FOR MANUAL AND AUTO MODE)
 // ----------------------------
 void setMotorSpeed() {
   Serial.println("** Entering Motor Speed Adjustment Mode **");
   stopAllMotors();
 
   bool exitMenu = false;
+  bool adjustingAutoSpeed = false;  // Tracks whether user is adjusting auto or manual speed
   unsigned long lastButtonPress = 0;
+  unsigned long holdStart = 0;  // To track how long both buttons are held
   const unsigned long buttonDebounce = 300;
+  const unsigned long exitHoldTime = 3000;  // 3s hold time to exit
+  const int minSpeed = 25;   // Minimum speed
+  const int maxSpeed = 250;  // Maximum speed
+
+  Serial.println("Now adjusting: MANUAL MODE SPEED");
 
   while (!exitMenu) {
     bool sw1 = (digitalRead(rotSw1) == LOW);
     bool sw2 = (digitalRead(rotSw2) == LOW);
 
-    // ✅ ADD A SMALL DELAY INSIDE MENU TO PREVENT SENSITIVE NAVIGATION
-    delay(200);  // Prevents rapid toggling between speeds
+    // ADD A SMALL DELAY INSIDE MENU TO PREVENT SENSITIVE NAVIGATION
+    delay(200);  
 
+    // **Increase Speed** (Stops at max value)
     if (sw1 && !sw2 && millis() - lastButtonPress > buttonDebounce) {
       lastButtonPress = millis();
-      currentSpeed = (currentSpeed >= 250) ? 25 : currentSpeed + 25;
-      myMotor.setSpeed(currentSpeed);
-      EEPROM.write(0, currentSpeed);  // Save new speed in EEPROM
-      Serial.print("New Motor Speed: ");
-      Serial.println(currentSpeed);
-      beepMultiple(1);
+      if (adjustingAutoSpeed) {
+        if (autoSpeed < maxSpeed) {
+          autoSpeed += 25;
+          myMotor.setSpeed(autoSpeed);
+          EEPROM.write(1, autoSpeed);
+          Serial.print("New Auto Mode Speed: ");
+          Serial.println(autoSpeed);
+          beepQuickDouble(); // Auto Mode: Two quick beeps
+        } else {
+          Serial.println("Auto Mode Speed is at MAX (250)");
+          beepMinMaxAlert(); // Beep alert for reaching MAX
+        }
+      } else {
+        if (manualSpeed < maxSpeed) {
+          saveSpeed(0, manualSpeed, min(manualSpeed + 25, 250));
+          myMotor.setSpeed(manualSpeed);
+          EEPROM.write(0, manualSpeed);
+          Serial.print("New Manual Mode Speed: ");
+          Serial.println(manualSpeed);
+          beepLong(); // Manual Mode: One long beep
+        } else {
+          Serial.println("Manual Mode Speed is at MAX (250)");
+          beepMinMaxAlert(); // Beep alert for reaching MAX
+        }
+      }
     }
 
+    // **Decrease Speed** (Stops at min value)
     if (!sw1 && sw2 && millis() - lastButtonPress > buttonDebounce) {
       lastButtonPress = millis();
-      currentSpeed = (currentSpeed <= 25) ? 250 : currentSpeed - 25;
-      myMotor.setSpeed(currentSpeed);
-      EEPROM.write(0, currentSpeed);  // Save new speed in EEPROM
-      Serial.print("New Motor Speed: ");
-      Serial.println(currentSpeed);
-      beepMultiple(1);
+      if (adjustingAutoSpeed) {
+        if (autoSpeed > minSpeed) {
+          autoSpeed -= 25;
+          myMotor.setSpeed(autoSpeed);
+          EEPROM.write(1, autoSpeed);
+          Serial.print("New Auto Mode Speed: ");
+          Serial.println(autoSpeed);
+          beepQuickDouble(); // Auto Mode: Two quick beeps
+        } else {
+          Serial.println("Auto Mode Speed is at MIN (25)");
+          beepMinMaxAlert(); // Beep alert for reaching MIN
+        }
+      } else {
+        if (manualSpeed > minSpeed) {
+          saveSpeed(0, manualSpeed, max(manualSpeed - 25, 25));
+          myMotor.setSpeed(manualSpeed);
+          EEPROM.write(0, manualSpeed);
+          Serial.print("New Manual Mode Speed: ");
+          Serial.println(manualSpeed);
+          beepLong(); // Manual Mode: One long beep
+        } else {
+          Serial.println("Manual Mode Speed is at MIN (25)");
+          beepMinMaxAlert(); // Beep alert for reaching MIN
+        }
+      }
     }
 
-    // ✅ Prevent accidental single-click detection before exit
+    // **Switch between Manual Mode Speed and Auto Mode Speed**
     if (sw1 && sw2) {
-      unsigned long pressStart = millis();
-      
-      while (sw1 && sw2) {
-        if (millis() - pressStart >= 1000) {  // Require 1s hold to exit
-          Serial.println("Exiting Motor Speed Adjustment Mode...");
-          beepMultiple(2);  // Exit confirmation
-
-          delay(2000);  // ✅ Add delay to prevent unintended single-clicks after exit
-          
-          // ✅ Wait until both buttons are fully released
-          while ((digitalRead(rotSw1) == LOW) || (digitalRead(rotSw2) == LOW)) {
-            // Do nothing, just wait
-          }
-
-          exitMenu = true;
-          break;
-        }
-        sw1 = (digitalRead(rotSw1) == LOW);
-        sw2 = (digitalRead(rotSw2) == LOW);
+      if (holdStart == 0) {  // Start tracking hold time
+        holdStart = millis();
       }
+
+      if (millis() - holdStart >= 1000) {  // Hold 1s to switch mode
+        adjustingAutoSpeed = !adjustingAutoSpeed;  // Toggle between manual and auto mode
+
+        if (adjustingAutoSpeed) {
+          Serial.println("Switched to adjusting: AUTO MODE SPEED");
+        } else {
+          Serial.println("Switched to adjusting: MANUAL MODE SPEED");
+        }
+
+        beepTriple();  // Three short beeps for switching mode
+        delay(1000);  // Prevent accidental double-switch
+        holdStart = 0;
+      }
+
+      // **Exit the menu if held for 3 seconds**
+      if (millis() - holdStart >= exitHoldTime) {
+        Serial.println("Exiting Motor Speed Adjustment Mode...");
+        beepLong();  // Long beep for exit confirmation
+        exitMenu = true;
+        break;
+      }
+    } else {
+      holdStart = 0;  // Reset hold timer if buttons are released
     }
   }
 }
 
 
 // ----------------------------
-//   HANDLE AUTO BUTTONS (FIXAD)
+//   HANDLE AUTO MODE EXIT BUTTONS
 // ----------------------------
 bool handleAutoButtons() {
   bool sw1 = (digitalRead(rotSw1) == LOW);
@@ -821,7 +707,7 @@ bool handleAutoButtons() {
     Serial.println("ABORT auto-läge (knapp >=1s).");
     beepMultiple(1);
     stopAllMotors();
-        // ⏳ NYTT: Vänta 1 sekund innan den går tillbaka till manuellt läge
+
     Serial.println("[System] Väntar 1 sekund innan återgång till manuellt läge...");
     delay(1000);
     autoModeActive = false;
@@ -850,3 +736,64 @@ void beepMultiple(int n) {
     delay(250);
   }
 }
+
+// ✅ Improved beep function for short/long signals
+void beepMultipleDuration(int n, int duration) {
+  for (int i = 0; i < n; i++) {
+    tone(buzzerPin, 1000);
+    delay(duration);
+    noTone(buzzerPin);
+    delay(200);
+  }
+}
+// 🔊 Auto Mode: Two quick beeps
+void beepQuickDouble() {
+  tone(buzzerPin, 1000);
+  delay(100);
+  noTone(buzzerPin);
+  delay(100);
+  tone(buzzerPin, 1000);
+  delay(100);
+  noTone(buzzerPin);
+}
+
+// 🔊 Manual Mode: One long beep
+void beepLong() {
+  tone(buzzerPin, 1000);
+  delay(400);
+  noTone(buzzerPin);
+}
+
+// 🔊 Alert when reaching MIN or MAX speed (2 quick + 2 long beeps)
+void beepMinMaxAlert() {
+  // Two quick beeps
+  tone(buzzerPin, 1000);
+  delay(100);
+  noTone(buzzerPin);
+  delay(100);
+  tone(buzzerPin, 1000);
+  delay(100);
+  noTone(buzzerPin);
+
+  delay(200); // Small pause
+
+  // Two long beeps
+  tone(buzzerPin, 1000);
+  delay(400);
+  noTone(buzzerPin);
+  delay(200);
+  tone(buzzerPin, 1000);
+  delay(400);
+  noTone(buzzerPin);
+}
+
+// 🔊 Three quick beeps when switching mode
+void beepTriple() {
+  for (int i = 0; i < 3; i++) {
+    tone(buzzerPin, 1000);
+    delay(100);
+    noTone(buzzerPin);
+    delay(100);
+  }
+}
+
