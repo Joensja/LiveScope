@@ -1,82 +1,75 @@
-# 🚀 Motor Control with Bluetooth & Button Input (Arduino)
+# 🚀 Arduino Motor Control System for Live transducer pole
 
-## 📖 Overview
-This project controls a **DC motor** via an **L298N motor driver** using:
-- **Bluetooth (HC-05)**
-- **Manual Button Controls**
-- **EEPROM for speed storage**
-- **Automatic Mode & Manual Mode**
-
-The user can **adjust speeds, switch modes, and control the motor** via:
-1. **Physical buttons**
-2. **Bluetooth commands via HC-05**
-
-## 🔧 Hardware Components
-| Component       | Description |
-|----------------|------------|
-| Arduino Board  | Main controller |
-| L298N Motor Driver | Controls motor speed and direction |
-| HC-05 Bluetooth Module | Allows remote control via smartphone or PC |
-| Push Buttons  | Used for manual control and menu selection |
-| Buzzer | Provides audible feedback |
-| EEPROM | Stores speed settings for Auto & Manual mode |
+An **Arduino-based motor control system** supporting **L298N & L298P motor drivers**, featuring **manual & sweep modes**, **speed adjustments**, and **Bluetooth control**.
 
 ---
 
-## 📌 **Features**
-### 🎛️ **Manual Mode**
-- Hold one button to move **forward** or **backward**.
-- Adjust speed in increments of **25**.
-- Maximum speed: **250**, Minimum speed: **25**.
-- Long beep **(400ms)** when changing speed.
+## 📌 Features
 
-### 🔄 **Automatic Mode**
-- Motor sweeps between **positions**.
-- Speed is adjustable in **auto mode** separately from manual mode.
-- Two **quick beeps** when adjusting speed.
-
-### 🎮 **Button Input & Holding Actions**
-| Hold Time | Action |
-|-----------|--------|
-| 1s  | **Switch to Auto Mode** (1 beep) |
-| 3s  | **Open Target Position Menu** (2 beeps) |
-| 5s  | **Open Speed Adjustment Menu** (3 beeps) |
-| 8s  | **Trigger 5s Continuous Beep, No Action** |
-
-### 📡 **Bluetooth Commands**
-| Command | Action |
-|---------|--------|
-| `L` | Rotate Left |
-| `R` | Rotate Right |
-| `S` | Stop Motor |
-| `+` / `-` | Increase / Decrease **Manual Speed** |
-| `U` / `D` | Increase / Decrease **Auto Speed** |
-| `A` | Activate Auto Mode |
-| `M` | Deactivate Auto Mode |
-
-### 🔊 **Buzzer Feedback**
-| Beep Type | Meaning |
-|-----------|---------|
-| 🔊 **1 Long Beep** | Manual speed change |
-| 🔊 **2 Quick Beeps** | Auto speed change |
-| 🔊 **3 Short Beeps** | Switching speed mode |
-| 🔊 **2 Quick + 2 Long Beeps** | Speed limit (Min/Max) reached |
-| 🔊 **5s Continuous Beep** | 8s button hold detected (No action) |
+✅ **Supports L298N & L298P Motor Drivers**  
+✅ **Manual & Sweep Modes for motor control**  
+✅ **Adjustable speed with EEPROM storage**  
+✅ **Bluetooth control via HC-05 module**  
+✅ **Button-controlled settings adjustments**  
+✅ **Buzzer alerts for user feedback**  
 
 ---
 
-## 🎮 **Button Press Flowchart**
-```plaintext
-                     +---------------------------+
-                     |  Press Both Buttons       |
-                     +---------------------------+
-                                |
-            +---------------------------------+
-            | Hold for:                      |
-            |                                 |
-   +--------+--------+------------+----------+--------+
-   | 1s     | 3s     | 5s         | 8s       | Release|
-   | (1B)   | (2B)   | (3B)       | (5s Beep)|        |
-   | Switch | Target | Adjust     | No Action| Reset  |
-   | Mode   | Pos    | Speed Mode |          |        |
-   +--------+--------+------------+----------+--------+
+## 🔧 Hardware Requirements
+
+- **Arduino Board** (Uno, Mega, etc.)
+- **L298N / L298P Motor Driver**
+- **DC Motors**
+- **HC-05 Bluetooth Module** (Optional)
+- **Push Buttons**
+- **Buzzer** for alerts
+
+---
+
+## 🛠️ Wiring Setup
+
+| Component              | Arduino Pin (L298P) | Arduino Pin (L298N) |
+|------------------------|--------------------|--------------------|
+| **Motor Driver EN**    | `3`                | `10`              |
+| **Motor Driver IN1**   | `12`               | `9`               |
+| **Motor Driver IN2**   | `-`               | `8`               |
+| **Position Switch**    | `7`                | `4`               |
+| **Rotation Switch 1**  | `6`                | `3`               |
+| **Rotation Switch 2**  | `11`               | `2`               |
+| **Buzzer**            | `10`               | `7`               |
+
+---
+
+## 🎛️ Operating Modes
+
+### 🔹 **Manual Mode**
+- Press **rotSw1** → Move **Forward**
+- Press **rotSw2** → Move **Backward**
+- Release buttons → **Motor Stops**
+- Speed can be adjusted via **button controls**
+
+### 🔄 **Sweep Mode**
+- The motor **moves back & forth** within a **defined angle**.
+- The **position switch (posSw)** is used for movement tracking.
+- Sweep **angle can be set** 
+
+### 🎚️ **Speed Adjustment**
+- **Hold both buttons for 5 seconds** → Enter Speed Adjustment Mode
+- **Tap both buttons quickly** → Switch between **Sweep & Manual speed**
+- **Press rotSw1** → **Increase speed**
+- **Press rotSw2** → **Decrease speed**
+- **Hold both buttons for 3 seconds** → **Exit the menu**
+
+---
+
+## 📝 Button Press Timing Actions
+
+| Button Hold Time | Action |
+|-----------------|--------|
+| **300ms** | Activate Sweep Mode |
+| **3s** | Open Sweep Angle Adjustment |
+| **5s** | Open Speed Adjustment Menu |
+| **8s** | Continuous 5-second beep warning |
+
+---
+
