@@ -1,78 +1,4 @@
-/*
-===============================================================================
-Project: Motorized Control System for a live sonar fish finder with L298N/L298P, Compass, and Bluetooth
-Author: [Joens]
-Date: [Early 2025]
-===============================================================================
-
-Description:
-This Arduino-based system controls a **motorized pole for live transducers** using an **L298N** or **L298P** motor driver. 
-It supports **manual operation**, **automatic sweeping mode**, and a **compass-guided mode(Heading)** using an 
-**HMC5883L magnetometer**. Bluetooth commands enable remote adjustments, and a **dedicated pedal button** 
-enhances usability.
-Made for a pedal with two buttons(boght) that can be pressed at the same time or a pedal with one button at the time and a additional third button(pedalButton, 3D-printed)
-
-Whats needed to build this? 
-https://cults3d.com/en/3d-model/gadget/electric-live-sonar-pole-auto-sweep-arduino-control
-===============================================================================
-Key Features:
--------------------------------------------------------------------------------
-✔ **Motor Control** (L298N/L298P) 
-   - Right & Left movement (Called forward and backwards due to driver logic. Forwards is left.)
-   - PWM speed control stored after reboot.
-   - Supports manual, Sweep and Compass mode.
-
-✔ **Compass Mode** (HMC5883L Magnetometer)
-   - Uses a **PID controller** to hold a specific heading. (NOT TUNED)
-   - Changes the speed depending on the PID fault. (NOT TUNED)
-   - Adjustable **PID parameters** in code or Bluetooth(`Kp`, `Ki`, `Kd`).
-   - Activated via pedal press or **Bluetooth command (`C`)**.
-
-✔ **Sweep Mode**
-   - Automated Sweeping between set angles.
-   - Adjustable sweep angle & sweep speed.
-   - Starts to turn to the left until first DIP-Switch activation and will after that start to turn to the right. You start your sweeping from where you are when sweeping is activated. . 
-
-✔ **Manual Control**
-   - Two buttons (`rotSw1`, `rotSw2`) for navigation.
-   - The two buttons are the two pedal buttons.These are also used to activate, deactivate and do settings.
-   - Pedal button (`pedalButton`)** for double-press actions for when you cant press both the pedals at the same time. Pressing this pedalButton is like pressing both the pedals.
-
-✔ **Settings**
-   - Two buttons `rotSw1`, `rotSw2`are the two pedal buttons.These are used to activate, deactivate and do settings.
-   - Press and hold "more than" -300ms = Sweep mode active. 3000ms = Activate compass mode. 5000ms = Set sweep angle. 8000ms = Set motor speed manual/sweep(Hold down both to switch)
-   - Pedal button (`pedalButton`)** for double-press actions for when you cant press both the pedals at the same time. Pressing this pedalButton is like pressing both the pedals.
-
-✔ **Bluetooth Remote Control**
-   - Send commands (`L`, `R`, `S`, `A`, `M`, etc.).
-   - Adjust speeds (`+`, `-`, `U`, `H` for sweep speed).
-   - **Live system status request (`O`)**.
-
-✔ **Memory & Configuration**
-   - **Stores speed & PID settings in EEPROM**.
-   - Improved **debounce handling** for input stability.
-   - **Optimized memory usage**, but close to full capacity.
-
-===============================================================================
-Notes:
-- **Modify `driverMode` to 1 (L298P) or 2 (L298N)** as per hardware.
-- Default speeds: **Manual (125), Sweep (100)**.
-- Keep an eye on **EEPROM usage**, as memory is near full.
-===============================================================================
-To be added or changed: 
-- Manual relay board configuration. So it can be used without a motor driver. 
-- DONE! Memory usage fixes (94% now)
-- Remove Debug comments in serial manager
-- Clean up and sort the code properly
-===============================================================================
-Testing needed for: 
-- DONE! Gyro. Note tested at all, no prio due to bad weather.
-- TEST GYRO ON A MOTOR AND SEE HOW IT REACTS. TRY TO SET THE REGULATOR
-- Bluetooth. Not tested at all due to hardware failure. 
-- DONE! Deeper general testing due to... it's boring and I need to sleep.
-===============================================================================
-*/
-
+#pragma GCC optimize ("Os")  // Optimerar för minsta möjliga storlek
 // GENERAL INFO
 // Forward + Backward is needed for the L298 library, it dont have left/right. 
 
@@ -83,7 +9,7 @@ Testing needed for:
 #include <SoftwareSerial.h> // Används för att hantera seriell kommunikation
 #include <MotorDriver.h>
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
+//#include <Adafruit_Sensor.h>
 #include <Adafruit_HMC5883_U.h>
 #include <PID_v1.h>
 
@@ -94,11 +20,16 @@ Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
 double setHeading = 0;   // Target heading (user sets this)
 double currentHeading = 0; // Current heading
 double output = 0;       // PID output for motor control
-double turnThreshold = 10;  // Standardvärde för svänggräns, kan ändras via Bluetooth
+double turnThreshold = 4;  // Standardvärde för svänggräns, kan ändras via Bluetooth
 
 // PID tuning constants (adjust as needed)
-double Kp = 7.5, Ki = 0.1, Kd = 0.5;
+double Kp = 6.0, Ki = 0.1, Kd = 0.5;
 PID headingPID(&currentHeading, &output, &setHeading, Kp, Ki, Kd, DIRECT);
+
+// GYRO Variables
+double filteredHeading = 0;       // Håller det filtrerade värdet
+const double alpha = 0.5;         // Filterfaktor (0.0-1.0) – högre = snabbare respons
+double rawHeading = 0;            // Lagrar råvärdet
 
 
 //SoftwareSerial BTserial(3, 2); // HC-05: TX på 3, RX på 4
@@ -123,25 +54,25 @@ boolean NL = true;
 //   GLOBAL VARIABLES
 // ----------------------------
 bool sweepModeActive   = false;
+bool compassModeActive = false;
+bool bothPressing = false;
+bool pressingsweep = false;
+bool countingDoublePress = false;
+
 int  sweep_angle   = 7;    
-// int  currentSpeed     = 125;   // OLD default for speed
 int manualSpeed = 125;  // Default speed for manual mode
 int sweepSpeed = 100;    // Default speed for sweep mode
-bool bothPressing = false;
-unsigned long bothPressStart = 0;
-bool pressingsweep = false;
-unsigned long pressTimesweep = 0;
-bool compassModeActive = false;  //
-bool motorIsStopped = false;  // Global flag to track motor state
+int motorDirection; // Direction of the motor compared to the gyro
 
-
-// Debounce och dubbeltryck-räknare
 unsigned long lastStopPrintTime = 0;
 unsigned long lastPosSwPress = 0;
 unsigned long posSwDebounceTime = 400;  
 unsigned long lastPressTime = 0;
 unsigned long doublePressStartTime = 0;
-bool countingDoublePress = false;
+unsigned long pressTimesweep = 0;
+unsigned long bothPressStart = 0;
+unsigned long lastDebugPrintTime = 0;  // Timer för debugutskrifter
+
 
 //myMotor = new L298N(EN, IN1, IN2);
 
@@ -149,28 +80,21 @@ bool countingDoublePress = false;
 //   FUNCTION DECLARATIONS
 // ----------------------------
 void checkBothLongestPress(bool sw1, bool sw2);
-bool handlesweepButtons();
 void runsweepmaticMode();
 void runManualMode(bool sw1, bool sw2);
 void stopAllMotors();
 void beepMultiple(int n);
-void setSweepAngle();  // Nu deklarerad korrekt
+void setSweepAngle();
 void updateDebounceTime(); 
 void beepQuickDouble();
 void beepLong();
 void beepMinMaxAlert();
 
 
-//bool bleConnected = false;  // Global variabel för att hålla koll på Bluetooth-anslutning
-
 void saveSpeed(int address, int &currentSpeed, int newSpeed) {
   if (currentSpeed != newSpeed) {  // Only write if different
     currentSpeed = newSpeed;       // Update variable
     EEPROM.write(address, newSpeed);  // Save to EEPROM
-//    Serial.print("[EEPROM] Speed Updated at address ");
-//    Serial.print(address);  
-//    Serial.print(": ");
-//    Serial.println(newSpeed);
   }
 }
 
@@ -187,7 +111,6 @@ void loadPIDValues() {
 
     // ✅ Prevent NaN or zero values
   if (Kp == 0 || Ki == 0 || Kd == 0 || isnan(Kp) || isnan(Ki) || isnan(Kd)) {
-      Serial.println("[WARNING] Invalid PID values from EEPROM. Resetting...");
       Kp = 2.5; Ki = 0.1; Kd = 0.5;
       savePIDValues(); // Sparar defaultvärden
     }
@@ -195,58 +118,65 @@ void loadPIDValues() {
     headingPID.SetTunings(Kp, Ki, Kd);
 }
 
-
-// Function to read heading from HMC5883L
-/*void updateHeading() {
-    sensors_event_t event;
-    mag.getEvent(&event);
-
-    // Beräkna heading i grader
-    currentHeading = atan2(event.magnetic.y, event.magnetic.x) * 180 / PI;
-    if (currentHeading < 0) {
-        currentHeading += 360;  // Se till att värdet är mellan 0–360°
+//----------------------------------
+// GYRO FUNCTIONS
+//----------------------------------
+/*void stabilizeCompass(int samples = 5, int delayMs = 200) {
+    double sum = 0;
+    for (int i = 0; i < samples; i++) {
+        updateHeading();
+        sum += currentHeading;
+        delay(delayMs);  // Vänta mellan mätningarna
     }
-
-    Serial.print("[DEBUG] Updated Heading: ");
-    Serial.println(currentHeading);
+    currentHeading = sum / samples;  // Använd snittet som startvärde
 }*/
 
+// Function to update compass heading using both X and Y axes
 void updateHeading() {
-  sensors_event_t event;
-  mag.getEvent(&event);
+    sensors_event_t event;
+    if (!mag.getEvent(&event)) {  // Om sensorn inte svarar
+        Serial.println("Magnetometer error! Reinitializing...");
+        mag.begin();  // Starta om magnetometern
+        return;
+    }
 
-  // Calculate heading in degrees
-  currentHeading = atan2(event.magnetic.y, event.magnetic.x) * 180 / PI;
-  if (currentHeading < 0) {
-      currentHeading += 360; // Ensure values stay within 0–360°
-    //Serial.print("[DEBUG] Updated Heading: ");
-    //Serial.println(currentHeading);
-  }
+    double newHeading = atan2(event.magnetic.y, event.magnetic.x) * 180 / PI;
+    if (newHeading < 0) newHeading += 360;
+
+    // Kolla om värdet faktiskt förändrats
+    if (abs(newHeading - currentHeading) > 0.01) {
+        currentHeading = newHeading;
+        Serial.print("Updated Heading: ");
+        Serial.println(currentHeading);
+    }
 }
 
+
+
 /*void updateHeading() {
     sensors_event_t event;
     mag.getEvent(&event);
 
-    Serial.print("[Compass] Raw Data: X=");
-    Serial.print(event.magnetic.x);
-    Serial.print(" | Y=");
-    Serial.print(event.magnetic.y);
-    Serial.print(" | Z=");
-    Serial.println(event.magnetic.z);
+    double newHeading = atan2(event.magnetic.y, event.magnetic.x) * 180 / PI;
+    if (newHeading < 0) newHeading += 360;
 
-    currentHeading = atan2(event.magnetic.y, event.magnetic.x) * 180 / PI;
-    if (currentHeading < 0) {
-        currentHeading += 360;  
-    }
+    rawHeading = newHeading;  // Sparar det råa värdet globalt
 
-    // ✅ Check if heading is valid
-    if (isnan(currentHeading) || currentHeading < 0 || currentHeading > 360) {
-        Serial.println("[ERROR] Compass returned invalid heading! Resetting...");
-        currentHeading = 0;  // Set a fallback value
-    }
+    const double alpha = 0.8;  // Snabbt filter
+    currentHeading = (alpha * newHeading) + ((1 - alpha) * currentHeading);
 }*/
 
+/*void waitForStableHeading(int attempts = 10, int delayMs = 100) {
+    double lastHeading = 0;
+    for (int i = 0; i < attempts; i++) {
+        updateHeading();
+        if (abs(currentHeading - lastHeading) < 1.0) {  // Om förändringen är mindre än 1 grad
+            break;
+        }
+        lastHeading = currentHeading;
+        delay(delayMs);  // Vänta innan nästa avläsning
+    }
+}*/
 
 // ----------------------------
 //   PEDAL BUTTON FUNCTION TO MINIMIZE DEBOUNCE
@@ -275,7 +205,7 @@ void loadSettings() {
     EEPROM.get(12, turnThreshold);
 
     if (isnan(turnThreshold) || turnThreshold < 1 || turnThreshold > 20) {
-        turnThreshold = 5;  // Återställ till standard om EEPROM har skräpdata
+        turnThreshold = 5;  // Reset if saved value is crap
         EEPROM.put(12, turnThreshold);
     }
 }
@@ -283,27 +213,26 @@ void loadSettings() {
 void setup() {
   Serial.begin(9600);
   BTserial.begin(9600);
-  loadSettings();  // 🛠 Anropa funktionen här
-  loadPIDValues();  // Load stored PID values from EEPROM
+  loadSettings();
+  loadPIDValues();
+
+  EEPROM.get(20, motorDirection); // Load motor direction from calibration saved in EEPROM
+  if (motorDirection != 1 && motorDirection != -1) {
+      motorDirection = 1; // Default if invalid data
+  }
+  Serial.print("M.Dir ");
+  Serial.println(motorDirection);
 
   // Initialize magnetometer
   if (!mag.begin()) {
-      Serial.println("HMC5883L not found");
+      Serial.println("HMC5883L na");
       while (1);
   }
   Serial.println("HMC5883L ok");
 
-  /*if (headingPID.GetMode() == AUTOMATIC) {
-      Serial.println("✅ PID is ACTIVE");
-  } else {
-      Serial.println("🛑 PID is NOT active!");
-  }*/
-
   // Initialize PID controller
   headingPID.SetMode(AUTOMATIC);
   headingPID.SetOutputLimits(-255, 255); // Motor PWM range
-  
-  
 
   // Select motor driver and corresponding I/O configuration, different depending on the motor driver
   // Motor Driver is set above at "int driverMode = 1;"
@@ -316,7 +245,7 @@ void setup() {
     rotSw1  = 6; // Turn right
     rotSw2  = 11; // Turn left
     buzzerPin = 10;
-  } else if (driverMode == 2) { // Externa boarn L298H 
+  } else if (driverMode == 2) { // External boarn L298H 
       Serial.println("L298N");
       EN  = 10;
       IN1 = 9;
@@ -325,10 +254,8 @@ void setup() {
       rotSw1  = 3;
       rotSw2  = 2;
       buzzerPin = 7;
-
-      // Create motor driver
-      myMotor = new L298N(EN, IN1, IN2);
-    }
+      myMotor = new L298N(EN, IN1, IN2); // Create motor driver
+    } 
 
     // Configure pins as output or input
     pinMode(EN, OUTPUT);
@@ -377,38 +304,30 @@ void loop() {
   unsigned long now = millis();
 
   checkBothLongestPress(sw1, sw2);
+  checkModeExit();
 
-  if (sweepModeActive) {
-    runsweepmaticMode();
-  } else {
-    runManualMode(sw1, sw2);
+    if (!sweepModeActive && !compassModeActive) {
+        runManualMode(digitalRead(rotSw1) == LOW, digitalRead(rotSw2) == LOW);
+    }
+
+        static unsigned long lastHeadingCheck = millis();
+        static double previousHeading = 0;
+
+      if (millis() - lastHeadingCheck > 5000) {  // Kollar var 5:e sekund
+          if (abs(currentHeading - previousHeading) < 0.1) {  // Ingen märkbar förändring
+              Serial.println("Heading still stuck! Reinitializing magnetometer...");
+              mag.begin();
+          }
+          previousHeading = currentHeading;
+          lastHeadingCheck = millis();
+      }
+
+  if (Serial.available()) {
+    char command = Serial.read();
+    handleSerialCommand(command);
   }
-
   delay(200);  // För att undvika att spamma seriell monitor
 }
-  // FUNCTION TO TEST THE COMPASS UNIT
-  /*testCompass();  // Testa kompassen
-  void testCompass() {
-      sensors_event_t event;
-      mag.getEvent(&event);  // Läs in data från kompassen
-
-      // Räkna ut heading
-      float heading = atan2(event.magnetic.y, event.magnetic.x) * 180 / PI;
-      if (heading < 0) heading += 360;  // Se till att vi har 0–360 grader
-
-      // Debugutskrift
-      Serial.print("📡 Compass Reading | Heading: ");
-      Serial.print(heading);
-      Serial.print("° | X: ");
-      Serial.print(event.magnetic.x);
-      Serial.print(" Y: ");
-      Serial.print(event.magnetic.y);
-      Serial.print(" Z: ");
-      Serial.println(event.magnetic.z);
-      
-      delay(1000); // Vänta en sekund mellan mätningarna
-    } */
-
 
 void adjustSpeed(bool increase, bool issweep) {
   int &speed = issweep ? sweepSpeed : manualSpeed;
@@ -425,6 +344,27 @@ void adjustSpeed(bool increase, bool issweep) {
       Serial.println(issweep ? "sweep Mode Speed limit reached" : "Manual Mode Speed limit reached");
       beepMinMaxAlert();
   }
+}
+
+// ----------------------------
+//   MOTOR CONTROL
+// ----------------------------
+void controlMotor(int direction, int speed) { // 1 = Right/Forward -1 = Left/Backward
+    if (driverMode == 1) { // L298P motor driver
+        if (direction == 1) { // Forward (right)
+            digitalWrite(IN1, HIGH);
+        } else if (direction == -1) { // Backward (left)
+            digitalWrite(IN1, LOW);
+        }
+        analogWrite(EN, speed); // Set motor speed using PWM
+    } else if (driverMode == 2 && myMotor) { // L298N motor driver
+        myMotor->setSpeed(speed);
+        if (direction == 1) {
+            myMotor->forward();
+        } else if (direction == -1) {
+            myMotor->backward();
+        }
+    }
 }
 
 // ----------------------------
@@ -493,7 +433,7 @@ void setSweepAngle() {
 
 void handleBluetoothCommand(char command) {
   switch (command) {
-    case 'L':  
+    case 'L':  // Turn Left
       if (driverMode == 1) {
           digitalWrite(IN1, LOW);
           analogWrite(EN, manualSpeed);
@@ -501,10 +441,9 @@ void handleBluetoothCommand(char command) {
           myMotor->setSpeed(manualSpeed);
           myMotor->backward();
       }
-      Serial.println("[BT] Rotating Left");
       break;
 
-    case 'R':  
+    case 'R': //  Turn right
       if (driverMode == 1) {
           digitalWrite(IN1, HIGH);
           analogWrite(EN, manualSpeed);
@@ -512,67 +451,38 @@ void handleBluetoothCommand(char command) {
           myMotor->setSpeed(manualSpeed);
           myMotor->forward();
       }
-      Serial.println("[BT] Rotating Right");
       break;
 
-    case 'S':  
-      stopAllMotors();
-      Serial.println("[BT] Stopping Motor");
-      BTserial.println("Stopping Motor");
-      break;
-
-    case '+':  // ⏫ Increase Manual Speed
+    case '+':  // Increase Manual Speed
       saveSpeed(0, manualSpeed, min(manualSpeed + 25, 250));  // Prevent exceeding 250
       myMotor->setSpeed(manualSpeed);
-      //Serial.print("[BT] Increased Manual Speed: ");
-      //Serial.println(manualSpeed);
-      BTserial.print("Manual Speed: ");
-      BTserial.println(manualSpeed);
       break;
 
-    case '-':  // ⏬ Decrease Manual Speed
+    case '-':  // Decrease Manual Speed
       saveSpeed(0, manualSpeed, max(manualSpeed - 25, 25));  // Prevent going below 25
       myMotor->setSpeed(manualSpeed);
-      //Serial.print("[BT] Decreased Manual Speed: ");
-      //Serial.println(manualSpeed);
-      BTserial.print("Manual Speed: ");
-      BTserial.println(manualSpeed);
       break;
 
-    case 'U':  // ⏫ Increase sweep Speed
+    case 'U':  // Increase sweep Speed
       saveSpeed(1, sweepSpeed, min(sweepSpeed + 25, 250));  // Prevent exceeding 250
-      //Serial.print("[BT] Increased sweep Speed: ");
-      //Serial.println(sweepSpeed);
-      BTserial.print("sweep Speed: ");
-      BTserial.println(sweepSpeed);
       break;
 
-    case 'H':  // ⏬ Decrease sweep Speed
+    case 'H':  // Decrease sweep Speed
       saveSpeed(1, sweepSpeed, max(sweepSpeed - 25, 25));  // Prevent going below 25
-      //Serial.print("[BT] Decreased sweep Speed: ");
-      //Serial.println(sweepSpeed);
-      //BTserial.print("sweep Speed: ");
-      //BTserial.println(sweepSpeed);
       break;
 
     case 'C':  // Deactivate Compass Mode
         compassModeActive = false;
-        Serial.println("[BT] Compass Deactivated");
-        BTserial.println("Compass Deactivated");
         stopAllMotors();
         break;
 
     case 'A':  
       sweepModeActive = true;
-      //Serial.println("[BT] sweep Mode Activated");
-      //BTserial.println("sweep Mode Activated");
       break;
 
     case 'M':  
       sweepModeActive = false;
       stopAllMotors();
-      //Serial.println("[BT] sweep Mode Deactivated");
-      //BTserial.println("sweep Mode Deactivated");
       break;
 
     case 'P':  // Adjust Kp "P3.5" → Sets Kp to 3.5
@@ -580,10 +490,6 @@ void handleBluetoothCommand(char command) {
           Kp = BTserial.parseFloat();
           headingPID.SetTunings(Kp, Ki, Kd);
           savePIDValues();  // Save new Kd to EEPROM
-          Serial.print("[BT] Updated Kp: ");
-          Serial.println(Kp);
-          BTserial.print("Kp Set to: ");
-          BTserial.println(Kp);
         }
       break;
 
@@ -592,10 +498,6 @@ void handleBluetoothCommand(char command) {
           Ki = BTserial.parseFloat();
           headingPID.SetTunings(Kp, Ki, Kd);
           savePIDValues();  // Save new Kd to EEPROM
-          Serial.print("[BT] Updated Ki: ");
-          Serial.println(Ki);
-          BTserial.print("Ki Set to: ");
-          BTserial.println(Ki);
         }
       break;
 
@@ -604,10 +506,6 @@ void handleBluetoothCommand(char command) {
           Kd = BTserial.parseFloat();
           headingPID.SetTunings(Kp, Ki, Kd);
           savePIDValues();  // Save new Kd to EEPROM
-          Serial.print("[BT] Updated Kd: ");
-          Serial.println(Kd);
-          BTserial.print("Kd Set to: ");
-          BTserial.println(Kd);
         }
       break;
 
@@ -616,14 +514,10 @@ void handleBluetoothCommand(char command) {
               turnThreshold = BTserial.parseFloat();
               turnThreshold = constrain(turnThreshold, 1, 20);  // Begränsa mellan 1-20
               EEPROM.put(12, turnThreshold);  // Spara i EEPROM
-              Serial.print("[BT] Updated turnThreshold: ");
-              Serial.println(turnThreshold);
-              BTserial.print("New Turn Threshold: ");
-              BTserial.println(turnThreshold);
           }
           break;
 
-    case 'O':  // Request all current settings
+    /*case 'O':  // Request all current settings
       BTserial.println("=== Current System Status ===");
       BTserial.print("Driver Mode: ");
       BTserial.println(driverMode == 1 ? "L298P" : "L298N");
@@ -650,7 +544,7 @@ void handleBluetoothCommand(char command) {
     default:
       //Serial.println("[BT] Unknown Command");
       //BTserial.println("Unknown Command");
-      break;
+      break;*/
   }
 }
 /*=== BLUETOOTH -- Current System Status ===
@@ -663,6 +557,137 @@ Target Heading: 180.0
 Kp: 2.5, Ki: 0.1, Kd: 0.5
 === End of Report ===*/
 
+void handleSerialCommand(char command) {
+  switch (command) {
+    case 'C':  // Aktivera Compass Mode
+      delay(50);  // Ge Serial lite tid att läsa hela värdet
+      runCompassMode();
+      Serial.println("Compass Mode Activated");
+      break;
+
+      case 'H':  // Sätt Heading (ex: H90.0 för 90 grader)
+        headingPID.SetMode(MANUAL);  // Pausa PID
+        delay(50);  // Låt Serial hinna läsa
+        if (Serial.available()) {
+          setHeading = Serial.parseFloat();
+          Serial.print("New Heading Setpoint: ");
+          Serial.println(setHeading);
+        }
+        headingPID.SetMode(AUTOMATIC);  // Återaktivera PID
+        break;
+
+    case 'P':  // Justera Kp (ex: P4.5)
+      if (Serial.available()) {
+        Kp = Serial.parseFloat();
+        headingPID.SetTunings(Kp, Ki, Kd);
+        savePIDValues();
+        Serial.print("Kp set to: ");
+        Serial.println(Kp);
+      }
+      break;
+
+    case 'I':  // Justera Ki (ex: I0.2)
+      if (Serial.available()) {
+        Ki = Serial.parseFloat();
+        headingPID.SetTunings(Kp, Ki, Kd);
+        savePIDValues();
+        Serial.print("Ki set to: ");
+        Serial.println(Ki);
+      }
+      break;
+
+    case 'D':  // Justera Kd (ex: D1.0)
+      if (Serial.available()) {
+        Kd = Serial.parseFloat();
+        headingPID.SetTunings(Kp, Ki, Kd);
+        savePIDValues();
+        Serial.print("Kd set to: ");
+        Serial.println(Kd);
+      }
+      break;
+
+    case 'S':  // STOP ALL FUNCTIONS
+        sweepModeActive = false;    // Deactivate Sweep Mode
+        compassModeActive = false;  // Deactivate Compass Mode
+        setHeading = 0;             // Reset setpoint
+        stopAllMotors();
+        Serial.println("Sweep + Compass deactivated");
+        break;
+
+
+    case 'O':  // Visa status
+      updateHeading();
+      Serial.print("Current Heading: ");
+      Serial.println(currentHeading);
+      Serial.print("Target Heading: ");
+      Serial.println(setHeading);
+      break;
+
+    case 'Q':
+        calibrateCompassMotorDirection(); // New command to calibrate direction
+        break;
+
+    while (Serial.available()) Serial.read();  // Clear buffer
+    Serial.println("Unknown Command");
+    break;
+  }
+}
+
+// ----------------------------
+//   COMPASS CALIBRATION
+// ----------------------------
+// Function to calibrate motor direction for compass mode
+// This function runs a short motor movement and checks which direction reduces the error to the set heading.
+void calibrateCompassMotorDirection() {
+    int testDirection = 1; // Default test direction
+
+    Serial.println("Cal. Dir");
+    updateHeading();
+    double startHeading = currentHeading;
+    Serial.print("startHeading: ");
+    Serial.println(startHeading);
+
+    unsigned long startTime = millis();
+    while (millis() - startTime < 6000) {
+    controlMotor(1, 50);  // Move motor forward at speed 50
+    }   
+
+    //delay(6000); // Let motor turn
+    updateHeading();
+    double endHeading = currentHeading;
+
+    stopAllMotors();
+    Serial.print("startHeading: ");
+    Serial.println(startHeading);
+    Serial.print("endHeadingd: ");
+    Serial.println(endHeading);
+
+    // Determine motor direction based on heading change
+    if (endHeading < startHeading) { // SETS WHEN LEFT IS LEFT AND RIGHT IS RIGHT
+        testDirection = 1;
+    } else {
+        testDirection = -1;
+    }
+    
+    Serial.print("Move back");
+    // Move motor back to starting position
+    unsigned long returnstartTime = millis();
+    while (millis() - returnstartTime < 6000) {
+    controlMotor(-1, 50);  // Move motor forward at speed 50
+    }
+
+    //delay(6000); // Move back for the same duration
+    stopAllMotors();
+
+    EEPROM.put(20, testDirection); // Store direction in EEPROM
+    Serial.print("Motor Direction Calibrated: ");
+    Serial.println(testDirection);
+    if (testDirection == 1) {
+      Serial.print("Left is decrease degrees");
+       } else {
+        Serial.print("Right is decrease degrees");
+      }  
+}
 
 // ----------------------------
 //   SOMETHING FO THE FUTURE OF DEBOUNCE
@@ -672,9 +697,6 @@ void updateDebounceTime() {
   // Only print if debounce time changes
   static unsigned long lastDebounceTime = 0;
   if (newDebounceTime != lastDebounceTime) {
-    //Serial.print("[System] Updated debounce time: ");
-    //Serial.print(newDebounceTime);
-    //Serial.println("ms");
     lastDebounceTime = newDebounceTime;  // Store last debounce value
   }
 
@@ -685,84 +707,59 @@ void updateDebounceTime() {
 //   SWEEP MODE
 // ----------------------------
 void runsweepmaticMode() {
-    //Serial.println("[sweep] Starting...");
-    beepMultiple(0);
+    sweepModeActive = true;
+    beepMultiple(0); // Initial beep signal to indicate sweep mode start
+    stopAllMotors(); // Ensure motors are stopped before starting the sweep
+    delay(1000); // Short delay for stabilization
 
-    stopAllMotors();
-    delay(1000);
+    // Move motor backward until position switch (posSw) is triggered, indicating starting point
+    controlMotor(-1, sweepSpeed); // Move motor backward at sweep speed
+    while (digitalRead(posSw) == HIGH) { // Wait until position switch is pressed
+        checkModeExit(); // Continuously check if the user wants to exit
+        if (!sweepModeActive) return; // Exit sweep mode if deactivated
+    }
 
-    //Serial.println("Going backward until posSw=LOW...");
+    stopAllMotors(); // Stop motors after reaching start position
+    int posCount = 0; // Initialize position counter
+    delay(1000); // Delay to ensure motor is fully stopped
 
-    if (driverMode == 1) {  // L298P motorstyrning
-        digitalWrite(IN1, LOW);  // Sätt riktning bakåt
-        analogWrite(EN, sweepSpeed);  // Sätt hastighet
+    while (sweepModeActive) { // Main loop for sweeping
+        checkModeExit(); // Check for exit command each loop iteration
+        if (!sweepModeActive) break; // Exit loop if sweep mode is deactivated
 
-        while (digitalRead(posSw) == HIGH) {
-            if (!handlesweepButtons()) return;
+        // Move motor forward towards the sweep angle limit
+        controlMotor(1, sweepSpeed); // Move motor forward at sweep speed
+
+        // Increment position counter until the desired sweep angle is reached
+        while (posCount < sweep_angle) {
+            checkModeExit(); // Check for exit command
+            if (!sweepModeActive) return; // Exit if sweep mode is deactivated
+
+            if (digitalRead(posSw) == LOW && millis() - lastPosSwPress > posSwDebounceTime) { // Detect position switch activation
+                lastPosSwPress = millis(); // Update last press time to avoid double counting
+                posCount++; // Increase position counter
+            }
         }
-    } else if (driverMode == 2 && myMotor) {  // L298N motorstyrning
-        myMotor->setSpeed(sweepSpeed);
-        myMotor->backward();
 
-        while (digitalRead(posSw) == HIGH) {
-            if (!handlesweepButtons()) return;
-        }
-    }
+          stopAllMotors(); // Stop motors after reaching sweep limit
+          delay(1000); // Delay to stabilize before returning
 
-  stopAllMotors();
-  int posCount = 0;
-  delay(1000);
+          // Move motor backward to return to the start position
+          controlMotor(-1, sweepSpeed); // Move motor backward at sweep speed
 
-  while (sweepModeActive) {
-    Serial.println("UP");
-    
-    if (driverMode == 1) {  // L298P
-      digitalWrite(IN1, HIGH);  // Framåt
-      analogWrite(EN, sweepSpeed);
-    } else if (driverMode == 2 && myMotor) {  // L298N
-      myMotor->setSpeed(sweepSpeed);
-      myMotor->forward();
-    }
+          // Decrement position counter until the start position is reached
+          while (posCount > 0) {
+              checkModeExit(); // Check for exit command
+              if (!sweepModeActive) return; // Exit if sweep mode is deactivated
 
-    while (posCount < sweep_angle) {
-      if (!handlesweepButtons()) return;
+              if (digitalRead(posSw) == LOW && millis() - lastPosSwPress > posSwDebounceTime) { // Detect position switch activation
+                  lastPosSwPress = millis(); // Update last press time
+                  posCount--; // Decrease position counter
+              }
+          }
 
-      if (digitalRead(posSw) == LOW && millis() - lastPosSwPress > posSwDebounceTime) {
-        lastPosSwPress = millis();
-        //Serial.println("[DEBUG] posSw CLICKED - UP");
-        posCount++;
-        Serial.print("posCount (UP) = ");
-        Serial.println(posCount);
-      }
-    }
-
-    stopAllMotors();
-    delay(1000);
-
-    Serial.println("DOWN");
-    
-    if (driverMode == 1) {  // L298P
-        digitalWrite(IN1, LOW);  // Bakåt
-        analogWrite(EN, sweepSpeed);
-     } else if (driverMode == 2 && myMotor) {  // L298N
-        myMotor->setSpeed(sweepSpeed);
-        myMotor->backward();
-    }
-
-    while (posCount > 0) {
-        if (!handlesweepButtons()) return;
-
-        if (digitalRead(posSw) == LOW && millis() - lastPosSwPress > posSwDebounceTime) {
-          lastPosSwPress = millis();
-          //Serial.println("[DEBUG] posSw CLICKED - DOWN");
-          posCount--;
-          Serial.print("posCount (DOWN) = ");
-          Serial.println(posCount);
-        }
-      }
-
-    stopAllMotors();
-    delay(1000);
+        stopAllMotors(); // Stop motors after returning to start
+        delay(1000); // Delay to ensure motor is fully stopped before next cycle
     }
 }
 
@@ -771,145 +768,120 @@ void runsweepmaticMode() {
 // ----------------------------
 void runCompassMode() {
     compassModeActive = true;
-    Serial.print("compassMode = ");
-    Serial.println(compassModeActive);
+    Serial.print("compass Mode");
+    EEPROM.get(20, motorDirection); // Load motor direction from EEPROM
 
     beepMultiple(2);
     stopAllMotors();
-    motorIsStopped = true;  // Initially, motor is stopped
-
-    /*// 🟢 Läs in aktuell heading flera gånger innan PID startar
-    for (int i = 0; i < 3; i++) {  
-        updateHeading();
-        delay(200);  // Vänta lite för att stabilisera
-    }*/
-
-    // Get current heading and set it as target
-    updateHeading();
-    setHeading = currentHeading;
-    Serial.print("Holding Heading: ");
+    
+   /* //waitForStableHeading(10, 100);  // Vänta tills heading är stabil
+    setHeading = currentHeading;    // Använd stabilt värde som setpoint
+    Serial.print("Initial Stable Heading: ");
     Serial.println(setHeading);
-    BTserial.print("Holding Heading: ");
-    BTserial.println(setHeading);
- 
+
+    //stabilizeCompass(5, 200);  // Läs in 5 stabila värden med 200ms mellanrum
+    setHeading = currentHeading;
+    Serial.print("Initial Stable Heading: ");
+    Serial.println(setHeading);*/
+
+      if (millis() - lastDebugPrintTime >= 2000) {
+        Serial.print("Initial Stable Heading: ");
+        Serial.println(setHeading);
+        BTserial.print("Initial Stable Heading: ");
+        BTserial.println(setHeading);    
+      lastDebugPrintTime = millis();
+  }
+
     bool pressingExit = false;
     unsigned long pressStartTime = 0;
     unsigned long lastPrintTime = 0;  // Timer for limiting serial output
 
-    // 🛑 PAUSA PID FÖR ATT FÖRHINDRA INITIALA RYCK
-    //Serial.println("[Compass Mode] Stabilizing...");
-    //delay(1500);  // Ge systemet 1.5s att stabilisera sig innan styrning
-
     while (compassModeActive) {
-        updateHeading();
-        headingPID.Compute();  // Compute PID correction
-        Serial.println("PID Compute...");
-        headingPID.Compute();
-        Serial.println("PID ok");
+    checkModeExit(); // Check for exit command with buttons
+    
+    if (Serial.available()) {
+        char command = Serial.read();
+        handleSerialCommand(command);  // Hanterar alla kommandon, inklusive 'S'
+    }
 
-        //DEBUG
-        Serial.print("Before PID | Setpoint: ");
-        Serial.print(setHeading);
-        Serial.print(" | Current: ");
-        Serial.print(currentHeading);
-        Serial.print(" |  BEFORE Compute(): ");
-        Serial.println(output); // 🔴 Se vad output är innan PID körs
-        Serial.print("After PID | Output AFTER Compute(): ");
-        Serial.println(output);
+    if (!compassModeActive) break; // Exit loop if deactivated
 
-        delay(500);  // Small delay for stability
+    if (Serial.available()) {
+        char command = Serial.read();
+        if (command == 'H') {
+            headingPID.SetMode(MANUAL);
+            delay(50);
+            if (Serial.available()) {
+                setHeading = Serial.parseFloat();
+                Serial.print("New Heading Setpoint: ");
+                Serial.println(setHeading);
+            }
+            headingPID.SetMode(AUTOMATIC);
+        }
+    }
+
+      updateHeading();
+      headingPID.Compute();  // Compute PID correction
+
+      delay(300);  // Small delay for stability
 
       // Timer för att skicka motoruppdateringar
       static unsigned long lastMotorUpdate = 0;
       const unsigned long motorUpdateInterval = 300; // Uppdatera var 500ms
-      const int deadZone = 8; // If the error is within ±8 degrees, don't move
+      const int deadZone = 2; // If the error is within ±8 degrees, don't move
 
-if (millis() - lastMotorUpdate >= motorUpdateInterval) {
+  if (millis() - lastMotorUpdate >= motorUpdateInterval) {
       lastMotorUpdate = millis();  // Uppdatera timer
-      Serial.print("[DEBUG] Motor CMD: ");
+      
+      if (millis() - lastDebugPrintTime >= 1000) {  
+            Serial.print("Setpoint: ");
+            Serial.print(setHeading);
+            Serial.print(" | Current: ");
+            Serial.print(currentHeading);
+            Serial.print(" | Raw: ");
+            Serial.print(rawHeading);  // Skriv ut råvärdet
+            Serial.print(" | OUTPUT to motor: ");
+            Serial.println(output); 
+        lastDebugPrintTime = millis();
+      }
 
-      int baseSpeed = 35;  // Lägsta hastighet
-      int maxSpeed = 200;   // Högsta hastighet
+      int baseSpeed = 45;  // Lägsta hastighet
+      int maxSpeed =100;   // Högsta hastighet
       //int speed = constrain(abs(output), baseSpeed, maxSpeed); // Begränsar hastighet
       static int lastSpeed = 0;
       int targetSpeed = constrain(abs(output), baseSpeed, maxSpeed);
       int speed = lastSpeed + ((targetSpeed - lastSpeed) / 2);  // Mjuk ökning
       lastSpeed = speed;
 
-      // ✅ Dödzon: Om felet är mindre än x° ska motorerna stanna
+      // If within deadzone nothing = Wait
       if (abs(setHeading - currentHeading) <= deadZone) {
+          if (millis() - lastDebugPrintTime >= 1000) {
           Serial.println("ON TARGET (within deadZone) - STOPPING");
+          lastDebugPrintTime = millis();
+          }
           stopAllMotors();
           continue; // Hoppa över resten av loopen för denna iteration
-      }
+         }
 
-      if (output > turnThreshold) {
-          Serial.print("RIGHT | Speed: ");
-          Serial.println(speed);
+         if (output > turnThreshold || output < -turnThreshold) {
 
-          if (driverMode == 1) {  // L298P
-              digitalWrite(IN1, HIGH);
-              analogWrite(EN, speed);
-          } else if (driverMode == 2 && myMotor) {  // L298N
-              myMotor->setSpeed(speed);
-              myMotor->forward();
-          }
-      } 
-      else if (output < -turnThreshold) {
-          Serial.print("LEFT | Speed: ");
-          Serial.println(speed);
-
-          if (driverMode == 1) {  // L298P
-              digitalWrite(IN1, LOW);
-              analogWrite(EN, speed);
-          } else if (driverMode == 2 && myMotor) {  // L298N
-              myMotor->setSpeed(speed);
-              myMotor->backward();
-          }
-      } 
-      else {
-          Serial.println("STOP");
-          stopAllMotors();
-      }
-  }
-
-
-
-        // **Print Status Once Per Second**
-        /*if (millis() - lastPrintTime >= 3000) {  // Every 1000ms (1s)
-            lastPrintTime = millis();
-            Serial.print("[Compass] Current Heading: ");
-            Serial.print(currentHeading);
-            Serial.print(" | Target: ");
-            Serial.print(setHeading);
-            Serial.print(" | Output: ");
-            Serial.println(output);
-        }*/
-
-        // **Exit condition: Press ANY button for 300ms to exit**
-        bool sw1 = (digitalRead(rotSw1) == LOW);
-        bool sw2 = (digitalRead(rotSw2) == LOW);
-        bool pedal = (digitalRead(pedalButton) == LOW);
-
-        if (sw1 || sw2 || pedal) { 
-            if (!pressingExit) { 
-                pressingExit = true;
-                pressStartTime = millis();
-            } else if (millis() - pressStartTime >= 300) {  // Hold any button for 300ms to exit
-                Serial.println("[Compass Mode] Off");
-                beepMultiple(2);
-                stopAllMotors();
-                compassModeActive = false;
-                return;
+              // Drive motor based on PID output and calibrated direction
+              if (output > 0) {  // Turn right
+                  Serial.print("Counting Pos down | Speed: ");
+                  Serial.println(speed);
+                  controlMotor(motorDirection == 1 ? 1 : -1, speed);  // Forward if direction is 1, else backward
+              } else if (output < 0) {  // Turn left
+                  Serial.print("Counting Pos Up | Speed: ");
+                  Serial.println(speed);
+                  controlMotor(motorDirection == 1 ? -1 : 1, speed);  // Backward if direction is 1, else forward
+              }
             }
-        } else {
-            pressingExit = false; // Reset if button is released
+           } else {
+            stopAllMotors();  // Stop motors if no significant output
+            Serial.println("[COMPASS] Output Zero - Motors Stopped");
         }
-
-        delay(50);  // Small delay for stability
-    }
+      }
 }
-
 
 // ----------------------------
 //   Manual Mode 
@@ -918,48 +890,28 @@ void runManualMode(bool sw1, bool sw2) {
     static int lastState = -1;  // 0 = STOP, 1 = FORWARD, 2 = BACKWARD
     static unsigned long lastPrintTime = 0;  // Timestamp to limit serial printing
 
-  if (sw1 && !sw2) {  // Kör framåt
-    if (driverMode == 1) { // L298P
-      digitalWrite(IN1, HIGH);  // Riktning framåt
-      analogWrite(EN, manualSpeed);
-    } else if (driverMode == 2 && myMotor) { // L298N
-      myMotor->setSpeed(manualSpeed);
-      myMotor->forward();
-    }
+    if (sw1 && !sw2) {  // Move forward
+        controlMotor(1, manualSpeed);  // Forward direction
+        if (lastState != 1 && millis() - lastPrintTime >= 1000) { 
+            Serial.println("M Right");
+            lastState = 1;
+            lastPrintTime = millis();
+        }
 
-  if (lastState != 1 && millis() - lastPrintTime >= 1000) { 
-      Serial.println("M Right");
-      lastState = 1;
-      lastPrintTime = millis();
-  }
+    } else if (!sw1 && sw2) {  // Move backward
+        controlMotor(-1, manualSpeed);  // Backward direction
+        if (lastState != 2 && millis() - lastPrintTime >= 1000) { 
+            Serial.println("M Left");
+            lastState = 2;
+            lastPrintTime = millis();
+        }
 
-  } else if (!sw1 && sw2) {  // Kör bakåt
-      if (driverMode == 1) { // L298P
-        digitalWrite(IN1, LOW);  // Riktning bakåt
-        analogWrite(EN, manualSpeed);
-      } else if (driverMode == 2 && myMotor) { // L298N
-        myMotor->setSpeed(manualSpeed);
-        myMotor->backward();
-      }
-
-  if (lastState != 2 && millis() - lastPrintTime >= 1000) { 
-    Serial.println("M Left");
-    lastState = 2;
-    lastPrintTime = millis();
-  }
-
-} else {  // Stanna motorn
-    if (driverMode == 1) { // L298P
-        analogWrite(EN, 0);  // Stänger av PWM
-    } else if (driverMode == 2 && myMotor) { // L298N
-        myMotor->stop();
-    }
-
-    if (lastState != 0 && millis() - lastPrintTime >= 1000) {  
-        //Serial.println("[Manual] Motor B => STOP");
-        lastState = 0;
-        lastPrintTime = millis();
-      }
+    } else {  // Stop motor
+        stopAllMotors();  // Stop using the existing stop function
+        if (lastState != 0 && millis() - lastPrintTime >= 1000) {  
+            lastState = 0;
+            lastPrintTime = millis();
+        }
     }
 }
 
@@ -968,8 +920,6 @@ void runManualMode(bool sw1, bool sw2) {
 // ----------------------------
 // Detects if both rotation switches are held for a long duration.
 // Different actions are triggered based on how long both buttons are held.
-
-//UTESTED SO THIS WILL PROBABLY NOT WORK PROPERLY!!!
 void checkBothLongestPress(bool sw1, bool sw2) {
     static unsigned long lastUpdate = 0;
     static unsigned long holdStartTime = 0;
@@ -1020,7 +970,7 @@ void checkBothLongestPress(bool sw1, bool sw2) {
             else if (held >= 300) {  
                 Serial.println("[sweep] 300ms sweep");
                 beepMultipleDuration(1, 300);
-                sweepModeActive = true;
+                runsweepmaticMode();                
             }
         }
         bothPressing = false;
@@ -1048,109 +998,8 @@ void checkBothLongestPress(bool sw1, bool sw2) {
     }
 }
 
-/* void checkBothLongestPress(bool sw1, bool sw2) {
-  static unsigned long lastUpdate = 0;  // Last log update timestamp
-  static unsigned long holdStartTime = 0;  // When the buttons were first pressed
-  static unsigned long lastBeepTime = 0;   // Last beep timestamp
-
-  static bool releaseLogged = false;  // Prevents duplicate log messages
-  static bool longPressTriggered = false; // Prevents multiple activations for 8s hold
-  
-  static unsigned long firstPressTime = 0; // Timestamp for the first button press
-  static bool waitingForSecondPress = false; // Indicates if waiting for second button press
-  
-
-  if (!bothPressing && (sw1 || sw2)) {  
-    // First button press detected, start timing
-    firstPressTime = millis();
-    waitingForSecondPress = true;
-  }
-
-  if (waitingForSecondPress && (sw1 && sw2)) {
-    // If the second button is pressed within 150ms, prevent single press registration
-    if (millis() - firstPressTime < 150) {
-      Serial.println("[INFO] Single press ignored due to quick second press.");
-      waitingForSecondPress = false;
-    }
-  }
-
-  if (!bothPressing && sw1 && sw2) {  
-    // If both buttons are pressed and were not already held
-    bothPressing = true;
-    holdStartTime = millis();  // Store press start time
-    lastUpdate = millis();  // Reset last log timestamp
-    lastBeepTime = millis(); // Start beep timer
-    releaseLogged = false;  // Reset flag
-    longPressTriggered = false; // Reset long hold flag
-    waitingForSecondPress = false; // Reset waiting flag
-  } 
-  else if (bothPressing && (!sw1 || !sw2)) {  // If one button is released after being held down
-    if (!releaseLogged && !longPressTriggered) {  
-      unsigned long held = millis() - holdStartTime;  // Calculate hold duration
-      Serial.println("[DEBUG] Both buttons released. Timer reset.");
-      releaseLogged = true;  // Prevent duplication
-      delay(50);  // Small delay to avoid bouncing
-
-      // ✅ 8-second hold => 5-second continuous beep, no action on release
-      if (held >= 8000) {  
-        Serial.println("[WARNING] 8s Hold Detected! 5s Continuous Beep!");
-        tone(buzzerPin, 1000);  // Start continuous beep for 5s
-        delay(5000);
-        noTone(buzzerPin);  // Stop beep
-        longPressTriggered = true; // Prevent further actions
-      }
-      else if (held >= 8000) {  
-        Serial.println("[sweep] 5s => Entering Motor Speed Adjustment Mode (3 fast beeps)");
-        beepMultipleDuration(3, 100); // Three short beeps
-        setMotorSpeed();  
-      } 
-      else if (held >= 5000) {  
-        Serial.println("[sweep] 3s => Set Sweep Angle (2 beeps)");
-        beepMultipleDuration(2, 200); // Two beeps
-        setSweepAngle();
-      } 
-      else if (held >= 3000) {  
-        Serial.println("[Compass Mode] 3s Hold Detected - Activating Compass Mode");
-        beepMultiple(2);
-        runCompassMode();  
-      } 
-      else if (held >= 300) {  
-        Serial.println("[sweep] 300ms => Activating sweep Mode (1 beep)");
-        beepMultipleDuration(1, 300); // One beep
-        sweepModeActive = true;
-      }
-    }
-    bothPressing = false;  // Reset flag
-
-    // ✅ Ensure buttons are fully released before continuing
-    while (digitalRead(rotSw1) == LOW || digitalRead(rotSw2) == LOW) {
-      delay(10);
-    }
-  } 
-  else if (bothPressing) {  
-    // If buttons are held down, continue checking time
-    unsigned long heldTime = millis() - holdStartTime;
-    
-    // 📢 Add a beep every second unless it's in the 8s hold state
-    if (heldTime < 8000 && millis() - lastBeepTime >= 1000) {  
-      tone(buzzerPin, 1000);
-      delay(100);
-      noTone(buzzerPin);
-      lastBeepTime = millis();
-    }
-
-    // Print held time in seconds
-    if (millis() - lastUpdate >= 500) {  
-      Serial.print("[DEBUG] Held Time: ");
-      Serial.print(heldTime / 1000.0, 1);  // Convert to seconds with 1 decimal
-      Serial.println("s");
-      lastUpdate = millis();
-    }
-  }
-}*/
-
 // ----------------------------
-//   SET MOTOR SPEED (FOR MANUAL AND SWEEP MODE) ADDED PEDALBUTTON FUNKTION. UNTESTED!!!
+//   SET MOTOR SPEED (FOR MANUAL AND SWEEP MODE) ADDED PEDALBUTTON FUNKTION.
 // ----------------------------
 void setMotorSpeed() {
     Serial.println("** Speed Adjustment  **");
@@ -1270,149 +1119,6 @@ void setMotorSpeed() {
     }
 }
 
-
-/*void setMotorSpeed() {
-    Serial.println("** Entering Motor Speed Adjustment Mode **");
-    stopAllMotors();
-
-    bool exitMenu = false;
-    bool adjustingSweepSpeed = false;  // True = Adjusting sweep speed, False = Adjusting manual speed
-    bool adjustingManualSpeed = true;  // Default to manual speed adjustment
-    unsigned long lastButtonPress = 0;
-    unsigned long holdStart = 0;
-    unsigned long pedalHoldStart = 0; // Track pedal button hold time
-    const unsigned long buttonDebounce = 300;
-    const unsigned long exitHoldTime = 3000;  // Hold 3 seconds to exit
-    const int minSpeed = 50;
-    const int maxSpeed = 250;
-
-    Serial.println("Now adjusting: MANUAL MODE SPEED");
-
-    while (!exitMenu) {
-      bool sw1 = (digitalRead(rotSw1) == LOW);
-      bool sw2 = (digitalRead(rotSw2) == LOW);
-
-      // Detect exit command (hold both buttons for 3 seconds)
-      if (sw1 && sw2) {
-          if (holdStart == 0) {
-              holdStart = millis();
-          } else if (millis() - holdStart >= exitHoldTime) {
-              Serial.println("Exiting Motor Speed Adjustment Mode...");
-              beepMultiple(2);  // Exit confirmation beep
-              exitMenu = true;
-              break;
-          }
-      } else {
-          holdStart = 0;  // Reset hold tracking when buttons are released
-      }
-
-      // Toggle between adjusting sweep and manual mode (tap both buttons quickly)
-      if (sw1 && sw2 && millis() - lastButtonPress > buttonDebounce) {
-          lastButtonPress = millis();
-          adjustingSweepSpeed = !adjustingSweepSpeed;
-          adjustingManualSpeed = !adjustingSweepSpeed;
-
-          Serial.println(adjustingSweepSpeed ? "Switched to adjusting: SWEEP MODE SPEED" : "Switched to adjusting: MANUAL MODE SPEED");
-          beepTriple();  // Three quick beeps for switching mode
-          delay(500);  // Prevent accidental double-switch
-      }
-
-      // **Increase Speed** (Stops at max value)
-      if (sw1 && !sw2 && millis() - lastButtonPress > buttonDebounce) {
-          lastButtonPress = millis();
-
-          if (adjustingSweepSpeed) {
-              if (sweepSpeed < maxSpeed) {
-                  sweepSpeed += 25;
-                  myMotor->setSpeed(sweepSpeed);
-                  EEPROM.write(1, sweepSpeed);
-                  //Serial.print("New SWEEP MODE Speed: ");
-                  Serial.println(sweepSpeed);
-                  beepQuickDouble();
-              } else {
-                  Serial.println("SWEEP MODE Speed is at MAX (250)");
-                  beepMinMaxAlert();
-              }
-          } else if (adjustingManualSpeed) {
-              if (manualSpeed < maxSpeed) {
-                  manualSpeed += 25;
-                  myMotor->setSpeed(manualSpeed);
-                  EEPROM.write(0, manualSpeed);
-                  //Serial.print("New MANUAL MODE Speed: ");
-                  Serial.println(manualSpeed);
-                  beepLong();
-              } else {
-                  Serial.println("MANUAL MODE Speed is at MAX (250)");
-                  beepMinMaxAlert();
-              }
-          }
-      }
-
-      // **Decrease Speed** (Stops at min value)
-      if (!sw1 && sw2 && millis() - lastButtonPress > buttonDebounce) {
-          lastButtonPress = millis();
-
-          if (adjustingSweepSpeed) {
-              if (sweepSpeed > minSpeed) {
-                  sweepSpeed -= 25;
-                  myMotor->setSpeed(sweepSpeed);
-                  EEPROM.write(1, sweepSpeed);
-                  //Serial.print("New SWEEP MODE Speed: ");
-                  Serial.println(sweepSpeed);
-                  beepQuickDouble();
-              } else {
-                  Serial.println("SWEEP MODE Speed is at MIN (50)");
-                  beepMinMaxAlert();
-              }
-          } else if (adjustingManualSpeed) {
-              if (manualSpeed > minSpeed) {
-                  manualSpeed -= 25;
-                  myMotor->setSpeed(manualSpeed);
-                  EEPROM.write(0, manualSpeed);
-                  //Serial.print("New MANUAL MODE Speed: ");
-                  Serial.println(manualSpeed);
-                  beepLong();
-              } else {
-                  Serial.println("MANUAL MODE Speed is at MIN (50)");
-                  beepMinMaxAlert();
-              }
-          }
-      }
-      delay(200);  // Prevent sensitive navigation
-    }
-}*/
-
-
-
-// ----------------------------
-//   HANDLE SWEEP MODE EXIT BUTTONS
-// ----------------------------
-bool handlesweepButtons() {
-  bool sw1 = (digitalRead(rotSw1) == LOW);
-  bool sw2 = (digitalRead(rotSw2) == LOW);
-
-  if ((sw1 && sw2) || (!sw1 && !sw2)) {
-    pressingsweep = false;
-    return true;
-  }
-
-  if (!pressingsweep) {
-    pressingsweep = true;
-    pressTimesweep = millis();
-  } else if (millis() - pressTimesweep >= 300) {  // Press 300ms to exit sweepmode, any button
-    //Serial.println("ABORT sweep-läge (knapp >=300ms).");
-    beepMultiple(1);
-    stopAllMotors();
-
-    //Serial.println("[System] Waits 1s to activate manual mode");
-    delay(1000);
-    sweepModeActive = false;
-    pressingsweep = false;
-    return false;
-  }
-  return true;
-}
-
 // ----------------------------
 //   STOP MOTORS
 // ----------------------------
@@ -1425,9 +1131,40 @@ void stopAllMotors() {
     //Serial.println("[System] Motors Stopped.");
 }
 
+// ----------------------------
+//   Check Exit Mode
+// ----------------------------
+void checkModeExit() {
+    bool sw1 = (digitalRead(rotSw1) == LOW); // Read first switch state
+    bool sw2 = (digitalRead(rotSw2) == LOW); // Read second switch state
+    bool pedal = (digitalRead(pedalButton) == LOW); // Read pedal state
+
+    if (sw1 || sw2 || pedal) {
+        static unsigned long pressStart = 0;
+        if (pressStart == 0) pressStart = millis(); // Start timing when button is pressed
+
+        if (millis() - pressStart >= 300) { // If held for 300ms, exit mode
+            if (compassModeActive) { 
+                compassModeActive = false;
+                setHeading = 0; // Reset heading setpoint
+                headingPID.SetMode(MANUAL); // Disable PID
+                Serial.println("Compass Mode Deactivated");
+            }
+            if (sweepModeActive) {
+                sweepModeActive = false;
+                Serial.println("Sweep Mode Deactivated");
+            }
+            stopAllMotors(); // Stop the motors
+            pressStart = 0; // Reset timer
+        }
+    } else {
+        static unsigned long pressStart = 0;
+        pressStart = 0; // Reset timer if no buttons are pressed
+    }
+}
 
 // ----------------------------
-//   BEEP FUNCTION
+//   BEEP FUNCTIONS
 // ----------------------------
 void beepMultiple(int n) {
   for (int i = 0; i < n; i++) {
@@ -1437,8 +1174,7 @@ void beepMultiple(int n) {
     delay(250);
   }
 }
-
-// ✅ Improved beep function for short/long signals
+// Beep function for short/long signals
 void beepMultipleDuration(int n, int duration) {
   for (int i = 0; i < n; i++) {
     tone(buzzerPin, 1000);
@@ -1447,7 +1183,7 @@ void beepMultipleDuration(int n, int duration) {
     delay(200);
   }
 }
-// 🔊 sweep Mode: Two quick beeps
+// sweep Mode: Two quick beeps
 void beepQuickDouble() {
   tone(buzzerPin, 1000);
   delay(100);
@@ -1457,15 +1193,13 @@ void beepQuickDouble() {
   delay(100);
   noTone(buzzerPin);
 }
-
-// 🔊 Manual Mode: One long beep
+// Manual Mode: One long beep
 void beepLong() {
   tone(buzzerPin, 1000);
   delay(400);
   noTone(buzzerPin);
 }
-
-// 🔊 Alert when reaching MIN or MAX speed (2 quick + 2 long beeps)
+// Alert when reaching MIN or MAX speed (2 quick + 2 long beeps)
 void beepMinMaxAlert() {
   // Two quick beeps
   tone(buzzerPin, 1000);
@@ -1487,8 +1221,7 @@ void beepMinMaxAlert() {
   delay(400);
   noTone(buzzerPin);
 }
-
-// 🔊 Three quick beeps when switching mode
+// Three quick beeps when switching mode
 void beepTriple() {
   for (int i = 0; i < 3; i++) {
     tone(buzzerPin, 1000);
