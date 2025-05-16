@@ -1,42 +1,51 @@
-# 🚀 Arduino Motor Control System for Live transducer pole
+# 🧭 Arduino Motor Control with Magnetometer and PID
 
-An **Arduino-based motor control system** supporting **L298N & L298P motor drivers**, featuring **manual & sweep modes**, **speed adjustments**, and **Bluetooth control**.
-
----
-
-## 📌 Features
-
-✅ **Supports L298N & L298P Motor Drivers**  
-✅ **Manual & Sweep Modes for motor control**  
-✅ **Adjustable speed with EEPROM storage**  
-✅ **Bluetooth control via HC-05 module**  
-✅ **Button-controlled settings adjustments**  
-✅ **Buzzer alerts for user feedback**  
+This Arduino project is a feature-rich motor control system that supports manual and automatic modes, Bluetooth control, heading correction using a magnetometer and PID, EEPROM storage, and dual motor/sensor configurations.
 
 ---
 
-## 🔧 Hardware Requirements
+## ⚙️ Features
 
-- **Arduino Board** (Uno, Mega, etc.)
-- **L298N / L298P Motor Driver**
-- **DC Motors**
-- **HC-05 Bluetooth Module** (Optional)
-- **Push Buttons**
-- **Buzzer** for alerts
+- Manual control via buttons (left/right)
+- Sweep mode with configurable angle and speed
+- Compass mode using magnetometer + PID controller
+- Bluetooth (HC-05) communication with live tuning
+- EEPROM storage for speed, PID values, and settings
+- Supports both L298N and L298P motor drivers
+- Works with POS switch or Hall sensor
+- Built-in calibration for heading direction
 
 ---
 
-## 🛠️ Wiring Setup
+## 📚 Libraries Used
 
-| Component              | Arduino Pin (L298P) | Arduino Pin (L298N) |
-|------------------------|--------------------|--------------------|
-| **Motor Driver EN**    | `3`                | `10`              |
-| **Motor Driver IN1**   | `12`               | `9`               |
-| **Motor Driver IN2**   | `-`               | `8`               |
-| **Position Switch**    | `7`                | `4`               |
-| **Rotation Switch 1**  | `6`                | `3`               |
-| **Rotation Switch 2**  | `11`               | `2`               |
-| **Buzzer**            | `10`               | `7`               |
+```cpp
+#include <Arduino.h>
+#include <L298N.h>
+#include <Adafruit_HMC5883_U.h>
+#include <PID_v1.h>
+#include <EEPROM.h>
+#include <Wire.h>
+#include <SoftwareSerial.h>
+```
+
+---
+
+## 🔌 I/O Configuration
+
+| Component             | Pin(s)             | Notes                                              |
+|----------------------|--------------------|----------------------------------------------------|
+| Motor Driver (L298P) | EN = 3, IN1 = 12, IN2 = 9 | Shield-style L298P                            |
+| Motor Driver (L298N) | EN = 10, IN1 = 9, IN2 = 8 | External L298N module                          |
+| POS Switch           | 7 or 4             | Used for sweep position detection                  |
+| Hall Sensor          | A1                 | Used if `sensorMode = 2`                           |
+| Rotation Buttons     | rotSw1 = 6/3, rotSw2 = 11/2 | Used for left/right and mode switching        |
+| Pedal Button         | 5                  | Alternate input for long-press functions           |
+| Buzzer               | 10 or 7            | Audible feedback                                   |
+| Bluetooth HC-05      | RX = 3, TX = 2      | SoftwareSerial                                     |
+| Magnetometer         | I2C (SDA, SCL)      | HMC5883L                                           |
+
+> Pins vary depending on selected `driverMode`.
 
 ---
 
@@ -49,27 +58,98 @@ An **Arduino-based motor control system** supporting **L298N & L298P motor drive
 - Speed can be adjusted via **button controls**
 
 ### 🔄 **Sweep Mode**
-- The motor **moves back & forth** within a **defined angle**.
-- The **position switch (posSw)** is used for movement tracking.
-- Sweep **angle can be set** 
+- The motor **moves back & forth** within a **defined angle**
+- The **position switch (POS/Hall)** tracks movement steps
+- **Sweep angle** can be set via menu or commands
+- Activated by holding both buttons for **300ms**
+
+### 🧭 **Compass Mode**
+- Uses the **HMC5883L magnetometer** to track heading
+- PID control adjusts motor to reach **set heading**
+- Heading setpoint and PID values adjustable via Serial/Bluetooth
+- Activated by holding both buttons for **3 seconds**
 
 ### 🎚️ **Speed Adjustment**
-- **Hold both buttons for 5 seconds** → Enter Speed Adjustment Mode
-- **Tap both buttons quickly** → Switch between **Sweep & Manual speed**
+- **Hold both buttons for 5 seconds** → Enter Speed Adjustment Menu
+- **Tap both buttons quickly** → Switch between Sweep & Manual speed
 - **Press rotSw1** → **Increase speed**
 - **Press rotSw2** → **Decrease speed**
 - **Hold both buttons for 3 seconds** → **Exit the menu**
 
----
-
-## 📝 Button Press Timing Actions
-
-| Button Hold Time | Action |
-|-----------------|--------|
-| **300ms** | Activate Sweep Mode |
-| **3s** | Open Sweep Angle Adjustment |
-| **5s** | Open Speed Adjustment Menu |
-| **8s** | Continuous 5-second beep warning |
+### 🧪 **Calibration**
+- Activated by holding buttons for **8 seconds** or sending `Q` command
+- Motor runs test to determine if heading increases CW or CCW
+- Stores direction factor in EEPROM for compass correction
 
 ---
 
+## 💾 EEPROM Address Map
+
+| Address | Description            |
+|---------|------------------------|
+| 0       | Manual speed           |
+| 1       | Sweep speed            |
+| 4–12    | PID values (Kp, Ki, Kd)|
+| 12      | Turn threshold         |
+| 20      | Motor direction factor |
+
+---
+
+## 📡 Bluetooth Commands
+
+| Command | Description                              |
+|---------|------------------------------------------|
+| `L` / `R` | Turn left or right manually            |
+| `+` / `-` | Adjust manual speed up/down            |
+| `U` / `H` | Adjust sweep speed up/down             |
+| `P3.5`    | Set Kp value                           |
+| `I0.2`    | Set Ki value                           |
+| `D0.6`    | Set Kd value                           |
+| `T4.0`    | Set turn threshold                     |
+| `A` / `M` | Activate/Deactivate sweep mode         |
+| `C`       | Stop compass mode                      |
+| `X`       | Toggle magnetometer ON/OFF             |
+| `Q`       | Calibrate motor direction              |
+
+---
+
+## 💡 Usage Notes
+
+- Sensor type (`sensorMode`) can be set to:
+  - `1` = POS switch (default)
+  - `2` = Hall effect sensor
+- Button hold durations trigger different modes:
+  - **300ms** = Sweep mode
+  - **3s** = Compass mode
+  - **5s** = Speed adjustment menu
+  - **8s** = Calibration
+- Settings persist via EEPROM
+- All serial and Bluetooth commands work interchangeably
+
+---
+
+## 🔋 Hardware Requirements
+
+- Arduino Uno/Nano or compatible
+- L298N or L298P motor driver
+- HMC5883L magnetometer (I2C)
+- HC-05 Bluetooth module (optional)
+- POS switch or Hall sensor
+- 2x push buttons + optional pedal button
+- Buzzer (audio feedback)
+
+---
+
+## 🖼️ Optional Enhancements
+
+- Add OLED/LCD for status display
+- Add rotary encoder for setting sweep angle
+- Add failsafe (e.g. max run time)
+
+---
+
+## 📜 License
+
+MIT License — feel free to use, modify, and improve!
+
+---
