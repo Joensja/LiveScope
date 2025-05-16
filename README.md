@@ -153,3 +153,53 @@ This Arduino project is a feature-rich motor control system that supports manual
 MIT License — feel free to use, modify, and improve!
 
 ---
+
+---
+
+## 🧭 Menu System Overview
+
+The system includes interactive button-based menus, allowing for configuration without a computer or app.
+
+### 🔘 Menu Navigation
+
+- **Enter Menus** by holding both rotation buttons or pedal:
+  - **300ms** → Start Sweep Mode
+  - **3s** → Compass Mode
+  - **5s** → Speed Adjustment Menu
+  - **8s** → Calibration Mode
+
+### 📊 Speed Adjustment Menu
+
+- Switch between **manual** and **sweep** speed by holding both buttons/pedal for 1 second
+- **rotSw1** → Increase speed by 25 (max 250)
+- **rotSw2** → Decrease speed by 25 (min 50)
+- EEPROM saves the new values automatically
+- Exit the menu by holding both buttons for 3 seconds
+
+### 🔁 Sweep Angle Menu
+
+- Enter by sending a command or using button press pattern
+- **rotSw1** → Increase sweep angle (max 8 steps)
+- **rotSw2** → Decrease sweep angle (min 2 steps)
+- Exit by holding both buttons or pressing pedal for 3 seconds
+
+### 📌 Safety and Debounce
+
+- All button inputs are debounced (≈50ms)
+- Long-press timers are reset when buttons are released
+- Timeout logic protects against lock-ups during sweep
+
+---
+
+## 📋 Menu Navigation Table
+
+| Hold Duration | Input                   | Function Triggered             |
+|---------------|------------------------|--------------------------------|
+| 300 ms        | Both Buttons / Pedal   | Start Sweep Mode               |
+| 3 seconds     | Both Buttons / Pedal   | Activate Compass Mode          |
+| 5 seconds     | Both Buttons / Pedal   | Enter Speed Adjustment Menu    |
+| 8 seconds     | Both Buttons / Pedal   | Calibrate Motor Direction      |
+| 1 second      | Both Buttons or Pedal (in Speed Menu) | Switch between Manual/Sweep Speed |
+| 3 seconds     | Both Buttons / Pedal (in Menu) | Exit Current Menu          |
+
+> 🛠 All menus give audible feedback (beeps) and save settings to EEPROM.
