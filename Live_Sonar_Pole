@@ -37,7 +37,7 @@ double rawHeading = 0;            // Lagrar råvärdet
 //------------------------------------------
 // HC05 PIN LAYOUT
 //------------------------------------------
-SoftwareSerial BTserial(3, 2); // RX | TX
+SoftwareSerial BTserial(8, 13); // HC-05 RX | TX Arduino TX/RX
 
 //-------------------------------------------
 // Choose between 1 (L298P) or 2 (L298N);
@@ -63,8 +63,6 @@ L298N* myMotor = nullptr;
 int pedalButton = 5; // Button on the printed pedal or somewhere that will be used when you don't have the possibility to press both buttons left+right
 int hallSensorPin = A1;  // Digital pin för hallsensor (justera efter hårdvara)
 
-const long baudRate = 38400;
-char c = ' ';
 
 // ----------------------------
 //   GLOBAL VARIABLES
@@ -77,7 +75,7 @@ bool countingDoublePress = false;
 bool useHallSensor = false;
 
 //--------------------------
-// SWEEP SETTINGS 
+// SWEEP SETTINGS
 //--------------------------
 int  sweep_angle   = 5;    
 int manualSpeed = 125;  // Default speed for manual mode
@@ -341,6 +339,18 @@ void setup() {
 }
 
 void loop() {
+  if (Serial.available()) {
+    char data = Serial.read();
+    //Serial.print("Från datorn: "); Serial.println(data);
+    BTserial.write(data);
+    handleSerialCommand(data); // <-- Lägg till
+  }
+  if (BTserial.available()) {
+    char data = BTserial.read();
+    //Serial.print("Från BT: "); Serial.println(data);
+    handleBluetoothCommand(data); // <-- Lägg till
+  }
+
   bool sw1 = (digitalRead(rotSw1) == LOW);
   bool sw2 = (digitalRead(rotSw2) == LOW);
 
@@ -378,10 +388,7 @@ void loop() {
               lastHeadingCheck = millis();
           }
 
-  if (Serial.available()) {
-    char command = Serial.read();
-    handleSerialCommand(command);
-  }
+
   delay(200);  // För att undvika att spamma seriell monitor
 }
 
@@ -498,34 +505,66 @@ void handleBluetoothCommand(char command) {
     case '+':  // Increase Manual Speed
       saveSpeed(0, manualSpeed, min(manualSpeed + 25, 250));  // Prevent exceeding 250
       myMotor->setSpeed(manualSpeed);
+      BTserial.print(F("Manual Speed: "));
+      BTserial.println(manualSpeed);      
       break;
 
     case '-':  // Decrease Manual Speed
       saveSpeed(0, manualSpeed, max(manualSpeed - 25, 25));  // Prevent going below 25
       myMotor->setSpeed(manualSpeed);
+      BTserial.print(F("Manual Speed: "));
+      BTserial.println(manualSpeed); 
       break;
 
     case 'U':  // Increase sweep Speed
       saveSpeed(1, sweepSpeed, min(sweepSpeed + 25, 250));  // Prevent exceeding 250
+      BTserial.print(F("Sweep Speed: "));
+      BTserial.println(sweepSpeed);
       break;
 
     case 'H':  // Decrease sweep Speed
       saveSpeed(1, sweepSpeed, max(sweepSpeed - 25, 25));  // Prevent going below 25
+      BTserial.print(F("Sweep Speed: "));
+      BTserial.println(sweepSpeed);
       break;
+      
+    case 'N':  // Öka antal sweep (sweep_angle)
+        sweep_angle = min(sweep_angle + 1, 8);  // max 8 eller vad du vill
+        BTserial.print(F("Sweep Angle: "));
+        BTserial.println(sweep_angle);
+        break;
+
+    case 'n':  // Minska antal sweep (sweep_angle)
+        sweep_angle = max(sweep_angle - 1, 2);  // min 2 eller vad du vill
+        BTserial.print(F("Sweep Angle: "));
+        BTserial.println(sweep_angle);
+        break;
 
     case 'C':  // Deactivate Compass Mode
-        compassModeActive = false;
-        stopAllMotors();
-        break;
+      compassModeActive = false;
+      BTserial.println(F("Compass Mode Deactivated"));
+      stopAllMotors();
+      break;
 
     case 'A':  
       sweepModeActive = true;
+      BTserial.println(F("Sweep Mode Activated"));
       break;
 
     case 'M':  
       sweepModeActive = false;
       stopAllMotors();
+      BTserial.println(F("Sweep Mode Deactivated"));
+
       break;
+
+    case 'S':  // STOP ALL FUNCTIONS
+        sweepModeActive = false;    // Deactivate Sweep Mode
+        compassModeActive = false;  // Deactivate Compass Mode
+        setHeading = 0;             // Reset setpoint
+        stopAllMotors();
+        Serial.println(F("Sweep + Compass deactivated"));
+        break;
 
     case 'P':  // Adjust Kp "P3.5" → Sets Kp to 3.5
       if (BTserial.available()) {
@@ -559,34 +598,44 @@ void handleBluetoothCommand(char command) {
           }
           break;
 
-    /*case 'O':  // Request all current settings
-      BTserial.print(Fln(F("=== Current System Status ==="));
-      BTserial.print(F(F("Driver Mode: "));
-      BTserial.print(Fln(driverMode == 1 ? "L298P" : "L298N"));
-      BTserial.print(F(F("Manual Speed: "));
-      BTserial.print(Fln(manualSpeed);
-      BTserial.print(F(F("Sweep Speed: "));
-      BTserial.print(Fln(sweepSpeed);
-      BTserial.print(F(F("Sweep Mode: "));
-      BTserial.print(Fln(sweepModeActive ? "Active" : "Inactive"));
-      BTserial.print(F(F("Current Heading: "));
-      BTserial.print(Fln(currentHeading);
-      BTserial.print(F(F("Target Heading: "));
-      BTserial.print(Fln(setHeading);
-      BTserial.print(F(F("Kp: "));
-      BTserial.print(F(Kp);
-      BTserial.print(F(F(", Ki: "));
-      BTserial.print(F(Ki);
-      BTserial.print(F(F(", Kd: "));
-      BTserial.print(Fln(Kd);
-      BTserial.print(Fln(F("=== End of Report ==="));
-      Serial.println(F("[BT] Sent system status report"));
-    break;
+        case 'O':  // Request all current settings
+          BTserial.println(F("=== Current System Status ==="));
+          BTserial.print(F("Driver Mode: "));
+          BTserial.println(driverMode == 1 ? "L298P" : "L298N");
+
+          BTserial.print(F("Manual Speed: "));
+          BTserial.println(manualSpeed);
+
+          BTserial.print(F("Sweep Speed: "));
+          BTserial.println(sweepSpeed);
+
+          BTserial.print(F("Sweep Mode: "));
+          BTserial.println(sweepModeActive ? "Active" : "Inactive");
+
+          BTserial.print(F("Current Heading: "));
+          BTserial.println(currentHeading);
+
+          BTserial.print(F("Target Heading: "));
+          BTserial.println(setHeading);
+
+          BTserial.print(F("Kp: "));
+          BTserial.println(Kp);
+
+          BTserial.print(F("Ki: "));
+          BTserial.println(Ki);
+
+          BTserial.print(F("Kd: "));
+          BTserial.println(Kd);
+
+          BTserial.println(F("=== End of Report ==="));
+          Serial.println(F("[BT] Sent system status report"));
+        break;
+
       
     default:
       //Serial.println(F("[BT] Unknown Command"));
       //BTserial.print(Fln(F("Unknown Command"));
-      break;*/
+      break;
   }
 }
 
