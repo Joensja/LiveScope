@@ -1,19 +1,23 @@
-# 🧭 Arduino Motor Control with Magnetometer and PID
+# 🧭 Arduino Live Transducer pole
 
-This Arduino project is a feature-rich motor control system that supports manual and automatic modes, Bluetooth control, heading correction using a magnetometer and PID, EEPROM storage, and dual motor/sensor configurations.
+This Arduino project is a motor control system that supports manual and automatic modes, Bluetooth control, heading correction and dual motor/sensor configurations.
 
 ---
 
 ## ⚙️ Features
 
-- Manual control via buttons (left/right)
-- Sweep mode with configurable angle and speed
+- Manual control via buttons/pedal (left/right)
+- Sweep mode with configurable angle
+- Sweep mode activated depending on there the motor is at the moment. 
+- Setable manual and sweep speed independently
 - Compass mode using magnetometer + PID controller
 - Bluetooth (HC-05) communication with live tuning
 - EEPROM storage for speed, PID values, and settings
 - Supports both L298N and L298P motor drivers
-- Works with POS switch or Hall sensor
-- Built-in calibration for heading direction
+- Works with micro switch or Hall sensor(Work in progress)
+- Built-in calibration for heading direction in compass mode
+- Menu system via buttons or bluetooth(Terminal or Android App)
+- Buzzer feedback for settings and modes
 
 ---
 
@@ -95,7 +99,7 @@ This Arduino project is a feature-rich motor control system that supports manual
 
 ---
 
-## 📡 Bluetooth Commands
+## 📡 Bluetooth Commands (To be updated)
 
 | Command | Description                              |
 |---------|------------------------------------------|
@@ -132,10 +136,10 @@ This Arduino project is a feature-rich motor control system that supports manual
 
 - Arduino Uno/Nano or compatible
 - L298N or L298P motor driver
-- HMC5883L magnetometer (I2C)
+- HMC5883L magnetometer (I2C) (Optional)
 - HC-05 Bluetooth module (optional)
-- POS switch or Hall sensor
-- 2x push buttons + optional pedal button
+- POS switch or Hall sensor (One of the two)
+- Pedal where you can activate both buttons at the same time or an optinal button(pedalbutton)
 - Buzzer (audio feedback)
 
 ---
@@ -170,18 +174,19 @@ The system includes interactive button-based menus, allowing for configuration w
 
 ### 📊 Speed Adjustment Menu
 
+-Speed is depending on the motor gears. PWM-signal 50-250 is what is allowed to set.(will probably change)
 - Switch between **manual** and **sweep** speed by holding both buttons/pedal for 1 second
 - **rotSw1** → Increase speed by 25 (max 250)
 - **rotSw2** → Decrease speed by 25 (min 50)
 - EEPROM saves the new values automatically
-- Exit the menu by holding both buttons for 3 seconds
+- Exit the menu by holding both buttons or pedalbutton for 3 seconds
 
 ### 🔁 Sweep Angle Menu
 
 - Enter by sending a command or using button press pattern
 - **rotSw1** → Increase sweep angle (max 8 steps)
 - **rotSw2** → Decrease sweep angle (min 2 steps)
-- Exit by holding both buttons or pressing pedal for 3 seconds
+- Exit by holding both buttons or pressing pedalbutton for 3 seconds
 
 ### 📌 Safety and Debounce
 
