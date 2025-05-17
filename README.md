@@ -42,7 +42,7 @@ This Arduino project is a feature-rich motor control system that supports manual
 | Rotation Buttons     | rotSw1 = 6/3, rotSw2 = 11/2 | Used for left/right and mode switching        |
 | Pedal Button         | 5                  | Alternate input for long-press functions           |
 | Buzzer               | 10 or 7            | Audible feedback                                   |
-| Bluetooth HC-05      | RX = 3, TX = 2      | SoftwareSerial                                     |
+| Bluetooth HC-05      | RX = 8, TX = 13      | SoftwareSerial                                     |
 | Magnetometer         | I2C (SDA, SCL)      | HMC5883L                                           |
 
 > Pins vary depending on selected `driverMode`.
@@ -63,7 +63,7 @@ This Arduino project is a feature-rich motor control system that supports manual
 - **Sweep angle** can be set via menu or commands
 - Activated by holding both buttons for **300ms**
 
-### 🧭 **Compass Mode**
+### 🧭 **Compass Mode** (Work in progress)
 - Uses the **HMC5883L magnetometer** to track heading
 - PID control adjusts motor to reach **set heading**
 - Heading setpoint and PID values adjustable via Serial/Bluetooth
@@ -76,7 +76,7 @@ This Arduino project is a feature-rich motor control system that supports manual
 - **Press rotSw2** → **Decrease speed**
 - **Hold both buttons for 3 seconds** → **Exit the menu**
 
-### 🧪 **Calibration**
+### 🧪 **Calibration** (Work in progress)
 - Activated by holding buttons for **8 seconds** or sending `Q` command
 - Motor runs test to determine if heading increases CW or CCW
 - Stores direction factor in EEPROM for compass correction
