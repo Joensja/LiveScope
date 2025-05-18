@@ -1,7 +1,7 @@
 #pragma GCC optimize ("Os")  // OptimIze
 // GENERAL INFO
 // Forward + Backward is needed for the L298 library, it dont have left/right. 
-
+// ADJUST int baseSpeed = 35; AND int maxSpeed = 50; TO FIT YOU ELECTRIC MOTOR. 
 
 #include <Arduino.h>
 #include <L298N.h>  
@@ -19,13 +19,19 @@ Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
 // PID CONTROL SETTINGS
 //---------------------------
 double setHeading = 0;   // Target heading (user sets this)
-double currentHeading = 0; // Current heading
 double output = 0;       // PID output for motor control
 double turnThreshold = 4;  // Standardvärde för svänggräns, kan ändras via Bluetooth
+double targetHeading = 0; // This is your REAL target
+double userSetpoint = 0;      // The heading the user wants (e.g. 33°)
+double currentHeading = 0;    // Filtered, current heading (0–360°)
+double pidInput = 0;          // What the PID controller reads as "input"
+double pidOutput = 0;         // PID controller output to motor
+double pidSetpoint = 0;       // PID setpoint (always zero when using diff!)
 
 // PID tuning constants (adjust as needed)
-double Kp = 6.0, Ki = 0.1, Kd = 0.5;
-PID headingPID(&currentHeading, &output, &setHeading, Kp, Ki, Kd, DIRECT);
+double Kp = 2.5, Ki = 0.1, Kd = 1.5;
+//PID headingPID(&currentHeading, &output, &setHeading, Kp, Ki, Kd, DIRECT);
+PID headingPID(&pidInput, &pidOutput, &pidSetpoint, Kp, Ki, Kd, DIRECT);
 
 //---------------------------
 // MAGNETOMETER SETTINGS
@@ -37,7 +43,7 @@ double rawHeading = 0;            // Lagrar råvärdet
 //------------------------------------------
 // HC05 PIN LAYOUT
 //------------------------------------------
-SoftwareSerial BTserial(8, 13); // HC-05 RX | TX Arduino TX/RX
+SoftwareSerial BTserial(8, 13); // HC-05 RX | TX
 
 //-------------------------------------------
 // Choose between 1 (L298P) or 2 (L298N);
@@ -52,7 +58,7 @@ int sensorMode = 1;
 //-------------------------------------------
 // HMC5883L Magnetometer YES/NO
 //-------------------------------------------
-bool useMagnetometer = false;
+bool useMagnetometer = true;
 
 // ----------------------------
 //   PIN CONFIGURATION
@@ -81,6 +87,7 @@ int  sweep_angle   = 5;
 int manualSpeed = 125;  // Default speed for manual mode
 int sweepSpeed = 125;    // Default speed for sweep mode
 int motorDirection; // Direction of the motor compared to the gyro
+int lastPwmValue = 0;
 
 unsigned long lastStopPrintTime = 0;
 unsigned long lastPosSwPress = 0;
@@ -107,13 +114,11 @@ void beepMinMaxAlert();
 void checkModeExit();
 void handleSerialCommand(char command);
 
-// ----------------------------
-//   I2C DEVICE CHECK
-// ----------------------------
-bool isHMC5883Connected() {
-  Wire.beginTransmission(0x1E);  // Standardadress för HMC5883L
-  return (Wire.endTransmission() == 0);  // 0 = ACK, annars error
+double shortestAngle(double target, double current) {
+    double diff = fmod((target - current + 540), 360) - 180;
+    return diff;
 }
+
 
 void saveSpeed(int address, int &currentSpeed, int newSpeed) {
   if (currentSpeed != newSpeed) {  // Only write if different
@@ -167,34 +172,59 @@ bool checkHoldToExit(unsigned long &holdStart, unsigned long exitHoldTime = 3000
 //----------------------------------
 // HEADING UPDATE
 //----------------------------------
+// ---------------------
+//   HEADING UPDATE (med filter och wrap)
+// ---------------------
 void updateHeading() {
-  if (!useMagnetometer) return;
+    if (!useMagnetometer) return;
+
     sensors_event_t event;
     static int failCount = 0;
+    static double filteredHeading = 0;   // Intern variabel för filter
+    const double alpha = 0.3;           // Filterfaktor (justera mellan 0.1 och 0.4 beroende på respons)
+    double rawHeading = 0;
+
     if (!mag.getEvent(&event)) {
         failCount++;
-      if (failCount > 5) {
-          Serial.println(F("Magnetometer failed repeatedly. Disabling..."));
-          useMagnetometer = false;
-          failCount = 0;
-          return;
-      }
-        mag.begin();
+        if (failCount > 5) {
+            Serial.println(F("Magnetometer failed repeatedly. Disabling..."));
+            useMagnetometer = false;
+            failCount = 0;
+            return;
+        }
         return;
     }
-      failCount = 0;  // reset if successful
+    failCount = 0;
 
+    // Räkna ut ny heading från magnetdata (i grader, 0-360)
+    rawHeading = atan2(event.magnetic.y, event.magnetic.x) * 180 / PI;
+    if (rawHeading < 0) rawHeading += 360;
 
-    double newHeading = atan2(event.magnetic.y, event.magnetic.x) * 180 / PI;
-    if (newHeading < 0) newHeading += 360;
+    // WRAP-FILTER över 0/360
+    double delta = rawHeading - filteredHeading;
+    if (delta > 180) delta -= 360;
+    else if (delta < -180) delta += 360;
 
-    // Kolla om värdet faktiskt förändrats
-    if (abs(newHeading - currentHeading) > 0.01) {
-        currentHeading = newHeading;
-        Serial.print(F("Updated Heading: "));
-        Serial.println(currentHeading);
+    filteredHeading += alpha * delta;
+
+    // Wrap igen om filtrerat värde går utanför [0,360]
+    if (filteredHeading < 0) filteredHeading += 360;
+    if (filteredHeading >= 360) filteredHeading -= 360;
+
+    currentHeading = filteredHeading;
+
+    // --- PRINT DEBUG ONLY EVERY 500ms ---
+    static unsigned long lastPrint = 0;
+    if (millis() - lastPrint > 750) {
+        Serial.print(F("Newheading (raw): "));
+        Serial.print(rawHeading, 2);
+        Serial.print(F(" | Filtered: "));
+        Serial.println(filteredHeading, 2);
+        lastPrint = millis();
     }
 }
+
+
 
 // ----------------------------
 //   PEDAL BUTTON FUNCTION TO MINIMIZE DEBOUNCE
@@ -230,8 +260,10 @@ void loadSettings() {
 
 void setup() {
   Wire.begin();  // Starta I2C-bussen
+  mag.begin();
   Serial.begin(9600);
   BTserial.begin(9600);
+  updateHeading();
   loadSettings();
   loadPIDValues();
 
@@ -242,25 +274,20 @@ void setup() {
   Serial.print(F("M.Dir "));
   Serial.println(motorDirection);
 
-  if (useMagnetometer) {
-    if (!isHMC5883Connected()) {
-      Serial.println(F("HMC5883L not physically connected. Disabling compass."));
-      useMagnetometer = false;
-    } else if (!mag.begin()) {
-      Serial.println(F("HMC5883L found on I2C but init failed. Disabling."));
-      useMagnetometer = false;
-    } else {
-      sensors_event_t event;
-      if (!mag.getEvent(&event)) {
-        Serial.println(F("HMC5883L not responsive after init. Disabling."));
-        useMagnetometer = false;
-      } else {
-        Serial.println(F("HMC5883L found and responsive."));
-      }
-    }
+// Initiera 5883
+if (useMagnetometer) {
+  if (!mag.begin()) {
+    Serial.println(F("Could not find a valid HMC5883L sensor, check wiring!"));
+    useMagnetometer = false;
   } else {
-    Serial.println(F("Magnetometer disabled by config."));
+    Serial.println(F("HMC5883L found and responsive."));
+    Serial.print(F("Heading:"));
+    Serial.println(currentHeading);
   }
+} else {
+  Serial.println(F("Magnetometer disabled by config."));
+}
+
 
   // HALL SENSOR 
   if (sensorMode == 1) {
@@ -341,13 +368,11 @@ void setup() {
 void loop() {
   if (Serial.available()) {
     char data = Serial.read();
-    //Serial.print("Från datorn: "); Serial.println(data);
     BTserial.write(data);
     handleSerialCommand(data); // <-- Lägg till
   }
   if (BTserial.available()) {
     char data = BTserial.read();
-    //Serial.print("Från BT: "); Serial.println(data);
     handleBluetoothCommand(data); // <-- Lägg till
   }
 
@@ -364,31 +389,34 @@ void loop() {
         runManualMode(digitalRead(rotSw1) == LOW, digitalRead(rotSw2) == LOW);
     }
 
-        static unsigned long lastHeadingCheck = millis();
-        static double previousHeading = 0;
+      static unsigned long lastHeadingCheck = millis();
+      static double previousHeading = 0;
+      static int headingStuckCount = 0;
 
-        static int headingStuckCount = 0;
-          if (useMagnetometer && millis() - lastHeadingCheck > 5000) {
-              if (abs(currentHeading - previousHeading) < 0.1) {
-                  headingStuckCount++;
-                  Serial.print(F("Heading still stuck! Retry #"));
-                  Serial.println(headingStuckCount);
+      // Bara när sweep eller kompass är aktiv OCH motorn rör sig:
+      if ((sweepModeActive || compassModeActive) && lastPwmValue > 0 && useMagnetometer && millis() - lastHeadingCheck > 5000) {
+          if (abs(currentHeading - previousHeading) < 0.1) {
+              headingStuckCount++;
+              Serial.print(F("Heading still stuck! Retry #"));
+              Serial.println(headingStuckCount);
+              Serial.print(F("Heading:"));
+              Serial.println(currentHeading);
+              Serial.print(F("previousHeading:"));
+              Serial.println(previousHeading);
 
-                  if (headingStuckCount >= 3) {
-                      Serial.println(F("Too many heading stalls. Disabling magnetometer."));
-                      useMagnetometer = false;
-                      headingStuckCount = 0;
-                  } else {
-                      mag.begin(); // Retry
-                  }
-              } else {
-                  headingStuckCount = 0; // Reset if it moved
+              if (headingStuckCount >= 3) {
+                  Serial.println(F("Too many heading stalls. Disabling magnetometer."));
+                  useMagnetometer = false;
+                  headingStuckCount = 0;
               }
-              previousHeading = currentHeading;
-              lastHeadingCheck = millis();
+              // mag.begin(); <-- BORTTAGEN! Inte här.
+          } else {
+              headingStuckCount = 0; // Reset if it moved
           }
-
-
+          previousHeading = currentHeading;
+          lastHeadingCheck = millis();
+      }
+  if (useMagnetometer) updateHeading();
   delay(200);  // För att undvika att spamma seriell monitor
 }
 
@@ -416,6 +444,7 @@ void adjustSpeed(bool increase, bool issweep) {
 //   MOTOR CONTROL
 // ----------------------------
 void controlMotor(int direction, int speed) { // 1 = Right/Forward -1 = Left/Backward
+    lastPwmValue = speed; // SPARA AKTUELLT PWM-VÄRDE
     if (driverMode == 1) { // L298P motor driver
         if (direction == 1) { // Forward (right)
             digitalWrite(IN1, HIGH);
@@ -650,78 +679,75 @@ void handleSerialCommand(char command) {
       Serial.println(F("Compass Mode Activated"));
       break;
 
-      case 'H':  // Sätt Heading (ex: H90.0 för 90 grader)
-        headingPID.SetMode(MANUAL);  // Pausa PID
-        delay(50);  // Låt Serial hinna läsa
-        if (Serial.available()) {
-          setHeading = Serial.parseFloat();
+  case 'H':  // Set heading (example: H90.0 for 90 degrees)
+      headingPID.SetMode(MANUAL);  // Pause PID
+      delay(50);  // Give Serial time to receive full value
+      if (Serial.available()) {
+          userSetpoint = Serial.parseFloat();  // <-- use userSetpoint everywhere!
           Serial.print(F("New Heading Setpoint: "));
-          Serial.println(setHeading);
-        }
-        headingPID.SetMode(AUTOMATIC);  // Återaktivera PID
-        break;
-
-    case 'P':  // Justera Kp (ex: P4.5)
-      if (Serial.available()) {
-        Kp = Serial.parseFloat();
-        headingPID.SetTunings(Kp, Ki, Kd);
-        savePIDValues();
-        Serial.print(F("Kp set to: "));
-        Serial.println(Kp);
+          Serial.println(userSetpoint);
       }
+      headingPID.SetMode(AUTOMATIC);  // Reactivate PID
       break;
 
-    case 'I':  // Justera Ki (ex: I0.2)
-      if (Serial.available()) {
-        Ki = Serial.parseFloat();
-        headingPID.SetTunings(Kp, Ki, Kd);
-        savePIDValues();
-        Serial.print(F("Ki set to: "));
-        Serial.println(Ki);
-      }
-      break;
-
-    case 'D':  // Justera Kd (ex: D1.0)
-      if (Serial.available()) {
-        Kd = Serial.parseFloat();
-        headingPID.SetTunings(Kp, Ki, Kd);
-        savePIDValues();
-        Serial.print(F("Kd set to: "));
-        Serial.println(Kd);
-      }
-      break;
-
-    case 'S':  // STOP ALL FUNCTIONS
-        sweepModeActive = false;    // Deactivate Sweep Mode
-        compassModeActive = false;  // Deactivate Compass Mode
-        setHeading = 0;             // Reset setpoint
-        stopAllMotors();
-        Serial.println(F("Sweep + Compass deactivated"));
-        break;
-
-
-    case 'O':  // Visa status
-      updateHeading();
-      Serial.print(F("Current Heading: "));
-      Serial.println(currentHeading);
-      Serial.print(F("Target Heading: "));
-      Serial.println(setHeading);
-      break;
-
-    case 'Q':
-        calibrateCompassMotorDirection(); // New command to calibrate direction
-        break;
-
-    while (Serial.available()) Serial.read();  // Clear buffer
-    Serial.println(F("Unknown Command"));
+  case 'P':  // Justera Kp (ex: P4.5)
+    if (Serial.available()) {
+      Kp = Serial.parseFloat();
+      headingPID.SetTunings(Kp, Ki, Kd);
+      savePIDValues();
+      Serial.print(F("Kp set to: "));
+      Serial.println(Kp);
+    }
     break;
 
-    case 'X':  // Aktivera/avaktivera kompass via seriell
-      useMagnetometer = !useMagnetometer;
-      Serial.print(F("Magnetometer is now "));
-      Serial.println(useMagnetometer ? "ENABLED" : "DISABLED");
+  case 'I':  // Justera Ki (ex: I0.2)
+    if (Serial.available()) {
+      Ki = Serial.parseFloat();
+      headingPID.SetTunings(Kp, Ki, Kd);
+      savePIDValues();
+      Serial.print(F("Ki set to: "));
+      Serial.println(Ki);
+    }
+    break;
+
+  case 'D':  // Justera Kd (ex: D1.0)
+    if (Serial.available()) {
+      Kd = Serial.parseFloat();
+      headingPID.SetTunings(Kp, Ki, Kd);
+      savePIDValues();
+      Serial.print(F("Kd set to: "));
+      Serial.println(Kd);
+    }
+    break;
+
+  case 'S':  // STOP ALL FUNCTIONS
+      sweepModeActive = false;    // Deactivate Sweep Mode
+      compassModeActive = false;  // Deactivate Compass Mode
+      stopAllMotors();
+      Serial.println(F("Sweep + Compass deactivated"));
       break;
 
+  case 'O':  // Visa status
+    updateHeading();
+    Serial.print(F("Current Heading: "));
+    Serial.println(currentHeading);
+    Serial.print(F("Target Heading: "));
+    Serial.println(userSetpoint);
+    break;
+
+  case 'Q':
+      calibrateCompassMotorDirection(); // New command to calibrate direction
+      break;
+
+  while (Serial.available()) Serial.read();  // Clear buffer
+  Serial.println(F("Unknown Command"));
+  break;
+
+  case 'X':  // Aktivera/avaktivera kompass via seriell
+    useMagnetometer = !useMagnetometer;
+    Serial.print(F("Magnetometer is now "));
+    Serial.println(useMagnetometer ? "ENABLED" : "DISABLED");
+    break;
   }
 }
 
@@ -731,55 +757,62 @@ void handleSerialCommand(char command) {
 // Function to calibrate motor direction for compass mode
 // This function runs a short motor movement and checks which direction reduces the error to the set heading.
 void calibrateCompassMotorDirection() {
-    int testDirection = 1; // Default test direction
-
-    Serial.println(F("Cal. Dir"));
+    int testDirection = 1; // Default value
+    Serial.println(F("=== Calibrating motor direction (compass) ==="));
     updateHeading();
     double startHeading = currentHeading;
-    Serial.print(F("startHeading: "));
-    Serial.println(startHeading);
+    Serial.print(F("Start Heading: "));
+    Serial.println(startHeading, 2);
 
+    // Move motor forward (direction 1)
     unsigned long startTime = millis();
-    while (millis() - startTime < 6000) {
-    controlMotor(1, 50);  // Move motor forward at speed 50
-    }   
+    while (millis() - startTime < 4000) {  // 4 seconds of movement
+        controlMotor(1, 50);
+        delay(5);  // Small delay to not block I2C bus
+    }
 
-    //delay(6000); // Let motor turn
+    stopAllMotors();
+    delay(500);  // Let the sensor stabilize
     updateHeading();
     double endHeading = currentHeading;
+    Serial.print(F("End Heading: "));
+    Serial.println(endHeading, 2);
 
-    stopAllMotors();
-    Serial.print(F("startHeading: "));
-    Serial.println(startHeading);
-    Serial.print(F("endHeadingd: "));
-    Serial.println(endHeading);
+    // Calculate heading delta (wrap-safe)
+    double delta = shortestAngle(endHeading, startHeading);
+    Serial.print(F("Delta heading: "));
+    Serial.println(delta, 2);
 
-    // Determine motor direction based on heading change
-    if (endHeading < startHeading) { // SETS WHEN LEFT IS LEFT AND RIGHT IS RIGHT
-        testDirection = 1;
+    // Decide direction
+    if (delta > 10) {
+        testDirection = 1; // Motor direction 1 = RIGHT (increases heading)
+    } else if (delta < -10) {
+        testDirection = -1; // Motor direction 1 = LEFT (decreases heading)
     } else {
-        testDirection = -1;
-    }
-    
-    Serial.print(F("Move back"));
-    // Move motor back to starting position
-    unsigned long returnstartTime = millis();
-    while (millis() - returnstartTime < 6000) {
-    controlMotor(-1, 50);  // Move motor forward at speed 50
+        Serial.println(F("Calibration failed! Not enough movement."));
+        return;
     }
 
-    //delay(6000); // Move back for the same duration
+    // Move back to starting position (optional but nice)
+    unsigned long returnTime = millis();
+    while (millis() - returnTime < 4000) {
+        controlMotor(-1, 50);
+        delay(5);
+    }
     stopAllMotors();
 
-    EEPROM.put(20, testDirection); // Store direction in EEPROM
+    // Save to EEPROM
+    EEPROM.put(20, testDirection);
     Serial.print(F("Motor Direction Calibrated: "));
     Serial.println(testDirection);
+
     if (testDirection == 1) {
-      Serial.print(F("Left is decrease degrees"));
-       } else {
-        Serial.print(F("Right is decrease degrees"));
-      }  
+        Serial.println(F("Motor 1 = RIGHT (increases heading)"));
+    } else {
+        Serial.println(F("Motor 1 = LEFT (decreases heading)"));
+    }
 }
+
 
 // ----------------------------
 //   SOMETHING FOR THE FUTURE OF DEBOUNCE
@@ -883,8 +916,8 @@ void runsweepmaticMode() {
     const unsigned long timeoutLimit = 10000;  // Timeout in milliseconds for any sensor wait
     unsigned long timeoutStart = millis();
 
-    // Move motor backward to reach starting position (sensor trigger)
-    controlMotor(-1, sweepSpeed);
+    // Move motor left to reach starting position (sensor trigger)
+    controlMotor(1, sweepSpeed);
     while (!isSensorActive()) {
         if (millis() - timeoutStart > timeoutLimit) {
             Serial.println(F("[SWEEP] Timeout while seeking start position."));
@@ -904,8 +937,8 @@ void runsweepmaticMode() {
         checkModeExit();
         if (!sweepModeActive) break;
 
-        // Move forward
-        controlMotor(1, sweepSpeed);
+        // Move right
+        controlMotor(-1, sweepSpeed);
         timeoutStart = millis();
 
         while (posCount < sweep_angle) {
@@ -938,8 +971,8 @@ void runsweepmaticMode() {
         stopAllMotors();
         delay(1000);
 
-        // Move backward
-        controlMotor(-1, sweepSpeed);
+        // Move left
+        controlMotor(1, sweepSpeed);
         timeoutStart = millis();
 
         while (posCount > 0) {
@@ -986,114 +1019,116 @@ void runCompassMode() {
     }
 
     compassModeActive = true;
-    Serial.print(F("compass Mode"));
-    EEPROM.get(20, motorDirection); // Load motor direction from EEPROM
+    Serial.println(F("Compass mode started."));
+    EEPROM.get(20, motorDirection);
 
     beepMultiple(2);
     stopAllMotors();
 
-      if (millis() - lastDebugPrintTime >= 2000) {
-        Serial.print(F("Initial Stable Heading: "));
-        Serial.println(setHeading);
-        BTserial.print(F("Initial Stable Heading: "));
-        BTserial.print(setHeading);    
-      lastDebugPrintTime = millis();
-  }
-
-    bool pressingExit = false;
-    unsigned long pressStartTime = 0;
-    unsigned long lastPrintTime = 0;  // Timer for limiting serial output
+    if (millis() - lastDebugPrintTime >= 2000) {
+        Serial.print(F("Initial User Setpoint: "));
+        Serial.println(userSetpoint);
+        BTserial.print(F("Initial User Setpoint: "));
+        BTserial.println(userSetpoint);
+        lastDebugPrintTime = millis();
+    }
 
     while (compassModeActive) {
-    checkModeExit(); // Check for exit command with buttons
-    
-    if (Serial.available()) {
-        char command = Serial.read();
-        handleSerialCommand(command);  // Hanterar alla kommandon, inklusive 'S'
-    }
+        checkModeExit();
 
-    if (!compassModeActive) break; // Exit loop if deactivated
-
-    if (Serial.available()) {
-        char command = Serial.read();
-        if (command == 'H') {
-            headingPID.SetMode(MANUAL);
-            delay(50);
-            if (Serial.available()) {
-                setHeading = Serial.parseFloat();
-                Serial.print(F("New Heading Setpoint: "));
-                Serial.println(setHeading);
+        // Handle serial "set heading"
+        if (Serial.available()) {
+            char command = Serial.read();
+            if (command == 'H') {
+                headingPID.SetMode(MANUAL);
+                delay(50);
+                if (Serial.available()) {
+                    userSetpoint = Serial.parseFloat();
+                    Serial.print(F("New Heading Setpoint: "));
+                    Serial.println(userSetpoint);
+                }
+                headingPID.SetMode(AUTOMATIC);
+            } else {
+                handleSerialCommand(command); // Any other commands
             }
-            headingPID.SetMode(AUTOMATIC);
         }
-    }
 
-      updateHeading();
-      headingPID.Compute();  // Compute PID correction
+        updateHeading(); // This should update currentHeading
 
-      delay(300);  // Small delay for stability
+        // Calculate shortest way to target heading
+        double diff = shortestAngle(userSetpoint, currentHeading);
 
-      // Timer för att skicka motoruppdateringar
-      static unsigned long lastMotorUpdate = 0;
-      const unsigned long motorUpdateInterval = 300; // Uppdatera var 500ms
-      const int deadZone = 2; // If the error is within ±8 degrees, don't move
+        // PID control: Always try to make diff = 0
+        pidInput = diff;
+        pidSetpoint = 0;
+        headingPID.Compute();
 
-  if (millis() - lastMotorUpdate >= motorUpdateInterval) {
-      lastMotorUpdate = millis();  // Uppdatera timer
-      
-      if (millis() - lastDebugPrintTime >= 1000) {  
-            Serial.print(F("Setpoint: "));
-            Serial.print(setHeading);
-            Serial.print(F(" | Current: "));
-            Serial.print(currentHeading);
-            Serial.print(F(" | Raw: "));
-            Serial.print(rawHeading);  // Skriv ut råvärdet
-            Serial.print(F(" | OUTPUT to motor: "));
-            Serial.println(output); 
-        lastDebugPrintTime = millis();
-      }
+        // DEBUG print every second
+        if (millis() - lastDebugPrintTime >= 1000) {
+            Serial.print(F("[DEBUG] Target Heading: "));
+            Serial.print(userSetpoint, 2);
+            Serial.print(F(" | True Heading: "));
+            Serial.print(currentHeading, 2);
+            Serial.print(F(" | Diff: "));
+            Serial.print(diff, 2);
+            Serial.print(F(" | PID Output: "));
+            Serial.println(pidOutput, 2);
+            lastDebugPrintTime = millis();
+        }
 
-      int baseSpeed = 45;  // Lägsta hastighet
-      int maxSpeed =100;   // Högsta hastighet
-      //int speed = constrain(abs(output), baseSpeed, maxSpeed); // Begränsar hastighet
-      static int lastSpeed = 0;
-      int targetSpeed = constrain(abs(output), baseSpeed, maxSpeed);
-      int speed = lastSpeed + ((targetSpeed - lastSpeed) / 2);  // Mjuk ökning
-      lastSpeed = speed;
+        // Safety: If too far off, stop
+        if (abs(diff) > 120) {
+            stopAllMotors();
+            Serial.println(F("[COMPASS] Diff > 120°, motor stopped for safety!"));
+            continue;
+        }
 
-      // If within deadzone nothing = Wait
-      if (abs(setHeading - currentHeading) <= deadZone) {
-          if (millis() - lastDebugPrintTime >= 1000) {
-          Serial.println(F("ON TARGET (within deadZone) - STOPPING"));
-          lastDebugPrintTime = millis();
-          }
-          stopAllMotors();
-          continue; // Hoppa över resten av loopen för denna iteration
-         }
+        // Motor update every 200ms
+        static unsigned long lastMotorUpdate = 0;
+        const unsigned long motorUpdateInterval = 200;
+        const int deadZone = 5;
+        static unsigned long lastOnTargetPrint = 0;
 
-         if (output > turnThreshold || output < -turnThreshold) {
+        if (millis() - lastMotorUpdate >= motorUpdateInterval) {
+            lastMotorUpdate = millis();
 
-              // Drive motor based on PID output and calibrated direction
-              if (output > 0) {  // Turn right
-                  Serial.print(F("Counting Pos down | Speed: "));
-                  Serial.println(speed);
-                  controlMotor(motorDirection == 1 ? 1 : -1, speed);  // Forward if direction is 1, else backward
-              } else if (output < 0) {  // Turn left
-                  Serial.print(F("Counting Pos Up | Speed: "));
-                  Serial.println(speed);
-                  controlMotor(motorDirection == 1 ? -1 : 1, speed);  // Backward if direction is 1, else forward
-              }
+            int baseSpeed = 35;
+            int maxSpeed = 50;
+            static int lastSpeed = 0;
+            int targetSpeed = constrain(abs(pidOutput), baseSpeed, maxSpeed);
+            int speed = lastSpeed + ((targetSpeed - lastSpeed) / 4);
+            lastSpeed = speed;
+
+            // Deadzone – print ON TARGET every second only
+            if (abs(diff) <= deadZone) {
+                stopAllMotors();
+                if (millis() - lastOnTargetPrint > 1000) {
+                    Serial.println(F("ON TARGET (within deadZone) - STOPPING"));
+                    lastOnTargetPrint = millis();
+                }
+                continue;
             }
-           } else {
-            stopAllMotors();  // Stop motors if no significant output
-            Serial.println(F("[COMPASS] Output Zero - Motors Stopped"));
+
+            // Motor direction logic
+            if (diff > turnThreshold) {
+                Serial.print(F("Turning RIGHT | Speed: "));
+                Serial.println(speed);
+                controlMotor(motorDirection == 1 ? 1 : -1, speed); // Right = 1
+            } else if (diff < -turnThreshold) {
+                Serial.print(F("Turning LEFT | Speed: "));
+                Serial.println(speed);
+                controlMotor(motorDirection == 1 ? -1 : 1, speed); // Left = -1
+            } else {
+                stopAllMotors();
+            }
         }
-      }
+
+        delay(40);
+    }
 }
-
-// ----------------------------
-//   Manual Mode 
-// ----------------------------
+//---------------------
+// MANUAL MODE
+//---------------------
 void runManualMode(bool sw1, bool sw2) {
     static int lastState = -1;  // 0 = STOP, 1 = FORWARD, 2 = BACKWARD
     static unsigned long lastPrintTime = 0;  // Timestamp to limit serial printing
@@ -1322,6 +1357,7 @@ void setMotorSpeed() {
 //   STOP MOTORS
 // ----------------------------
 void stopAllMotors() {
+      lastPwmValue = 0; // Reset Value
     if (driverMode == 1) { // L298P
         analogWrite(EN, 0);
     } else if (driverMode == 2 && myMotor) { // L298N
