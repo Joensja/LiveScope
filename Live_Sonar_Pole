@@ -6,7 +6,7 @@
 #include <Arduino.h>
 #include <L298N.h>  
 #include <EEPROM.h>
-#include <SoftwareSerial.h> // Används för att hantera seriell kommunikation
+#include <SoftwareSerial.h> 
 #include <MotorDriver.h>
 #include <Wire.h>
 #include <Adafruit_HMC5883_U.h>
@@ -36,9 +36,9 @@ PID headingPID(&pidInput, &pidOutput, &pidSetpoint, Kp, Ki, Kd, DIRECT);
 //---------------------------
 // MAGNETOMETER SETTINGS
 //---------------------------
-double filteredHeading = 0;       // Håller det filtrerade värdet
-const double alpha = 0.5;         // Filterfaktor (0.0-1.0) – högre = snabbare respons
-double rawHeading = 0;            // Lagrar råvärdet
+double filteredHeading = 0;       // Filteread heading value
+const double alpha = 0.5;         // Filter factor. Higher = Faster
+double rawHeading = 0;            // Raw data
 
 //------------------------------------------
 // HC05 PIN LAYOUT
@@ -67,7 +67,7 @@ int EN, IN1, IN2, posSw, rotSw1, rotSw2, buzzerPin;
 L298N* myMotor = nullptr;
 
 int pedalButton = 5; // Button on the printed pedal or somewhere that will be used when you don't have the possibility to press both buttons left+right
-int hallSensorPin = A1;  // Digital pin för hallsensor (justera efter hårdvara)
+int hallSensorPin = A1;  // Digital pin for hallsensor
 
 
 // ----------------------------
@@ -96,7 +96,7 @@ unsigned long lastPressTime = 0;
 unsigned long doublePressStartTime = 0;
 unsigned long pressTimesweep = 0;
 unsigned long bothPressStart = 0;
-unsigned long lastDebugPrintTime = 0;  // Timer för debugutskrifter
+unsigned long lastDebugPrintTime = 0;  // Timer för debug writing
 
 // ----------------------------
 //   FUNCTION DECLARATIONS
@@ -141,17 +141,17 @@ void loadPIDValues() {
     // ✅ Prevent NaN or zero values
   if (Kp == 0 || Ki == 0 || Kd == 0 || isnan(Kp) || isnan(Ki) || isnan(Kd)) {
       Kp = 2.5; Ki = 0.1; Kd = 0.5;
-      savePIDValues(); // Sparar defaultvärden
+      savePIDValues(); // Saves default values
     }
 
     headingPID.SetTunings(Kp, Ki, Kd);
 }
 
-// Funktion som kollar om man håller inne pedal eller båda knapparna för att avsluta meny
+// CHECK IF BOTH BUTTONS ARE PRESSED AT THE SAME TIME
 bool checkHoldToExit(unsigned long &holdStart, unsigned long exitHoldTime = 3000) {
     bool sw1 = (digitalRead(rotSw1) == LOW);
     bool sw2 = (digitalRead(rotSw2) == LOW);
-    bool pedal = isPedalPressed();  // Använd din befintliga debounced funktion
+    bool pedal = isPedalPressed();  
 
     bool exitPressed = (sw1 && sw2) || pedal;
 
@@ -159,29 +159,26 @@ bool checkHoldToExit(unsigned long &holdStart, unsigned long exitHoldTime = 3000
         if (holdStart == 0) holdStart = millis();
 
         if (millis() - holdStart >= exitHoldTime) {
-            beepMultiple(2);  // Bekräftelsepip
-            return true;      // Menyn ska avslutas
+            beepMultiple(2);  
+            return true;     
         }
     } else {
-        holdStart = 0;  // Nollställ om användaren släpper
+        holdStart = 0; 
     }
 
-    return false;  // Menyn fortsätter
+    return false; 
 }
 
 //----------------------------------
 // HEADING UPDATE
 //----------------------------------
-// ---------------------
-//   HEADING UPDATE (med filter och wrap)
-// ---------------------
 void updateHeading() {
     if (!useMagnetometer) return;
 
     sensors_event_t event;
     static int failCount = 0;
-    static double filteredHeading = 0;   // Intern variabel för filter
-    const double alpha = 0.3;           // Filterfaktor (justera mellan 0.1 och 0.4 beroende på respons)
+    static double filteredHeading = 0;   // Intern variable for filter
+    const double alpha = 0.3;           // Filter factor higher = faster
     double rawHeading = 0;
 
     if (!mag.getEvent(&event)) {
@@ -196,18 +193,18 @@ void updateHeading() {
     }
     failCount = 0;
 
-    // Räkna ut ny heading från magnetdata (i grader, 0-360)
+    // calculate new data from magnetometer (in degrees, 0-360)
     rawHeading = atan2(event.magnetic.y, event.magnetic.x) * 180 / PI;
     if (rawHeading < 0) rawHeading += 360;
 
-    // WRAP-FILTER över 0/360
+    // WRAP-FILTER 0/360
     double delta = rawHeading - filteredHeading;
     if (delta > 180) delta -= 360;
     else if (delta < -180) delta += 360;
 
     filteredHeading += alpha * delta;
 
-    // Wrap igen om filtrerat värde går utanför [0,360]
+    // Wrap if filter value  [0,360]
     if (filteredHeading < 0) filteredHeading += 360;
     if (filteredHeading >= 360) filteredHeading -= 360;
 
@@ -223,8 +220,6 @@ void updateHeading() {
         lastPrint = millis();
     }
 }
-
-
 
 // ----------------------------
 //   PEDAL BUTTON FUNCTION TO MINIMIZE DEBOUNCE
@@ -259,7 +254,7 @@ void loadSettings() {
 }
 
 void setup() {
-  Wire.begin();  // Starta I2C-bussen
+  Wire.begin();  // start the I2C-bus
   mag.begin();
   Serial.begin(9600);
   BTserial.begin(9600);
@@ -369,11 +364,11 @@ void loop() {
   if (Serial.available()) {
     char data = Serial.read();
     BTserial.write(data);
-    handleSerialCommand(data); // <-- Lägg till
+    handleSerialCommand(data); 
   }
   if (BTserial.available()) {
     char data = BTserial.read();
-    handleBluetoothCommand(data); // <-- Lägg till
+    handleBluetoothCommand(data);
   }
 
   bool sw1 = (digitalRead(rotSw1) == LOW);
@@ -393,7 +388,7 @@ void loop() {
       static double previousHeading = 0;
       static int headingStuckCount = 0;
 
-      // Bara när sweep eller kompass är aktiv OCH motorn rör sig:
+      //Check only if in compass or search mode and motor is on:
       if ((sweepModeActive || compassModeActive) && lastPwmValue > 0 && useMagnetometer && millis() - lastHeadingCheck > 5000) {
           if (abs(currentHeading - previousHeading) < 0.1) {
               headingStuckCount++;
@@ -409,7 +404,7 @@ void loop() {
                   useMagnetometer = false;
                   headingStuckCount = 0;
               }
-              // mag.begin(); <-- BORTTAGEN! Inte här.
+             
           } else {
               headingStuckCount = 0; // Reset if it moved
           }
@@ -417,7 +412,7 @@ void loop() {
           lastHeadingCheck = millis();
         }
     if (useMagnetometer) updateHeading();
-    delay(200);  // För att undvika att spamma seriell monitor
+    delay(200); 
     }
 
 //---------------------
@@ -444,7 +439,7 @@ void adjustSpeed(bool increase, bool issweep) {
 //   MOTOR CONTROL
 // ----------------------------
 void controlMotor(int direction, int speed) { // 1 = Right/Forward -1 = Left/Backward
-    lastPwmValue = speed; // SPARA AKTUELLT PWM-VÄRDE
+    lastPwmValue = speed; // Saves PWM-value
     if (driverMode == 1) { // L298P motor driver
         if (direction == 1) { // Forward (right)
             digitalWrite(IN1, HIGH);
@@ -476,7 +471,7 @@ void setSweepAngle() {
   while (!exitMenu) {
     bool sw1 = (digitalRead(rotSw1) == LOW);
     bool sw2 = (digitalRead(rotSw2) == LOW);
-    unsigned long holdStart = 0;  // Lägg till för exit-spårning
+    unsigned long holdStart = 0; 
     bool pedal = isPedalPressed();
     bool exitPressed = (sw1 && sw2) || pedal;
 
@@ -523,7 +518,7 @@ void setSweepAngle() {
 // I - ADJUST I = "I0.15" → Sets Ki to 0.15
 // D - ADJUST D = "D0.7" → Sets Kd to 0.7
 // T - CHANGE THREASHHOLD FOR COMPASS
-// H - SET HEADING "H90.0" FOR 90°
+// h - SET HEADING "H90.0" FOR 90°
 // X - ACTIVATE/DEACTIVATE COMPASS
 // Q - COMPASS CALIBRATION
 // O - GET ALL SETTINGS
@@ -648,7 +643,7 @@ void handleBluetoothCommand(char command) {
           }
           break;
 
-        case 'H':  // SET HEADING (example: H90.0 for 90 degrees)
+        case 'h':  // SET HEADING (example: H90.0 for 90 degrees)
             headingPID.SetMode(MANUAL);  // Pause PID
             delay(50);  // Give Serial time to receive full value
             if (Serial.available()) {
@@ -663,6 +658,7 @@ void handleBluetoothCommand(char command) {
             useMagnetometer = !useMagnetometer;
             Serial.print(F("Magnetometer is now "));
             Serial.println(useMagnetometer ? "ENABLED" : "DISABLED");
+            BTserial.println(useMagnetometer ? "X1" : "X0");
             break;
 
         case 'Q':
