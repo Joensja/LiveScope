@@ -274,19 +274,19 @@ void setup() {
   Serial.print(F("M.Dir "));
   Serial.println(motorDirection);
 
-// Initiera 5883
-if (useMagnetometer) {
-  if (!mag.begin()) {
-    Serial.println(F("Could not find a valid HMC5883L sensor, check wiring!"));
-    useMagnetometer = false;
-  } else {
-    Serial.println(F("HMC5883L found and responsive."));
-    Serial.print(F("Heading:"));
-    Serial.println(currentHeading);
-  }
-} else {
-  Serial.println(F("Magnetometer disabled by config."));
-}
+    // Initiera 5883
+    if (useMagnetometer) {
+    if (!mag.begin()) {
+        Serial.println(F("Could not find a valid HMC5883L sensor, check wiring!"));
+        useMagnetometer = false;
+    } else {
+        Serial.println(F("HMC5883L found and responsive."));
+        Serial.print(F("Heading:"));
+        Serial.println(currentHeading);
+    }
+    } else {
+    Serial.println(F("Magnetometer disabled by config."));
+    }
 
 
   // HALL SENSOR 
@@ -415,10 +415,10 @@ void loop() {
           }
           previousHeading = currentHeading;
           lastHeadingCheck = millis();
-      }
-  if (useMagnetometer) updateHeading();
-  delay(200);  // För att undvika att spamma seriell monitor
-}
+        }
+    if (useMagnetometer) updateHeading();
+    delay(200);  // För att undvika att spamma seriell monitor
+    }
 
 //---------------------
 // SPEED SETTINGS
@@ -508,6 +508,28 @@ void setSweepAngle() {
 
 //-----------------------------
 // BLUETOOTH COMMANDS
+// L - LEFT
+// R - RIGHT
+// + - INCRESE MANUAL SPEED
+// - - DECREASE MANUAL SPEED
+// U . INCREASE SWEEP SPEED
+// H - DECREASE SWEEP SPEED
+// N - INCREASE SWEEP ANGLE
+// n - DECREASE SWEEP ANGLE
+// C - ACTIVATE COMPASS MODE
+// A - ACTIVATE SEARCH MODE
+// S - STOP ALL FUNCTIONS
+// P - ADJUST KP = "P3.5" → Sets Kp to 3.5
+// I - ADJUST I = "I0.15" → Sets Ki to 0.15
+// D - ADJUST D = "D0.7" → Sets Kd to 0.7
+// T - CHANGE THREASHHOLD FOR COMPASS
+// H - SET HEADING "H90.0" FOR 90°
+// X - ACTIVATE/DEACTIVATE COMPASS
+// Q - COMPASS CALIBRATION
+// O - GET ALL SETTINGS
+// ----------------------------
+// ADD THESE
+// NOTHING TO ADD
 //-----------------------------
 void handleBluetoothCommand(char command) {
   switch (command) {
@@ -557,42 +579,41 @@ void handleBluetoothCommand(char command) {
       BTserial.println(sweepSpeed);
       break;
       
-    case 'N':  // Öka antal sweep (sweep_angle)
+    case 'N':  // INCREASE SWEEP ANGLE
         sweep_angle = min(sweep_angle + 1, 8);  // max 8 eller vad du vill
         BTserial.print(F("Sweep Angle: "));
         BTserial.println(sweep_angle);
         break;
 
-    case 'n':  // Minska antal sweep (sweep_angle)
+    case 'n':  // DECREASE SWEEP ANGLE
         sweep_angle = max(sweep_angle - 1, 2);  // min 2 eller vad du vill
         BTserial.print(F("Sweep Angle: "));
         BTserial.println(sweep_angle);
         break;
 
-    case 'C':  // Deactivate Compass Mode
-      compassModeActive = false;
-      BTserial.println(F("Compass Mode Deactivated"));
-      stopAllMotors();
+    case 'C':  // ACTIVATE COMPASS MODE
+      compassModeActive = true;
+      BTserial.println(F("Compass Mode activated"));
       break;
 
-    case 'A':  
+    case 'A':  // ACTIVATE SEARCH MODE
       sweepModeActive = true;
       BTserial.println(F("Sweep Mode Activated"));
       break;
 
-    case 'M':  
+    /*case 'M':  
       sweepModeActive = false;
       stopAllMotors();
       BTserial.println(F("Sweep Mode Deactivated"));
 
-      break;
+      break;*/
 
     case 'S':  // STOP ALL FUNCTIONS
         sweepModeActive = false;    // Deactivate Sweep Mode
         compassModeActive = false;  // Deactivate Compass Mode
         setHeading = 0;             // Reset setpoint
         stopAllMotors();
-        Serial.println(F("Sweep + Compass deactivated"));
+        Serial.println(F("Sweep OR Compass deactivated"));
         break;
 
     case 'P':  // Adjust Kp "P3.5" → Sets Kp to 3.5
@@ -626,6 +647,27 @@ void handleBluetoothCommand(char command) {
               EEPROM.put(12, turnThreshold);  // Spara i EEPROM
           }
           break;
+
+        case 'H':  // SET HEADING (example: H90.0 for 90 degrees)
+            headingPID.SetMode(MANUAL);  // Pause PID
+            delay(50);  // Give Serial time to receive full value
+            if (Serial.available()) {
+                userSetpoint = Serial.parseFloat(); 
+                Serial.print(F("New Heading Setpoint: "));
+                Serial.println(userSetpoint);
+            }
+            headingPID.SetMode(AUTOMATIC);  // Reactivate PID
+            break;
+
+        case 'X':  // ACTIVATE/DEACTIVATE COMPASS 
+            useMagnetometer = !useMagnetometer;
+            Serial.print(F("Magnetometer is now "));
+            Serial.println(useMagnetometer ? "ENABLED" : "DISABLED");
+            break;
+
+        case 'Q':
+            calibrateCompassMotorDirection(); // New command to calibrate direction
+            break;
 
         case 'O':  // Request all current settings
           BTserial.println(F("=== Current System Status ==="));
@@ -670,16 +712,25 @@ void handleBluetoothCommand(char command) {
 
 //-----------------------------
 // SERIAL COMMANDS
+// C - ACTIVATE COMPASS MODE
+// H - SET HEADING "H90.0" FOR 90°
+// P - SET Kp "P4.5" FOR 4.5
+// I - SET Ki "I0.2" FOR 0.2
+// D - SET Kd "D1.0" FOR 1.0
+// S - STOP ALL FUNCTIONS
+// O - SHOW HEADING STATUS
+// Q - COMPASS CALIBRATION
+// X - ACTIVATE/DEACTIVATE COMPASS 
 //-----------------------------
 void handleSerialCommand(char command) {
   switch (command) {
-    case 'C':  // Aktivera Compass Mode
+    case 'C':  // ACTIVATE COMPASS MODE
       delay(50);  // Ge Serial lite tid att läsa hela värdet
       runCompassMode();
       Serial.println(F("Compass Mode Activated"));
       break;
 
-  case 'H':  // Set heading (example: H90.0 for 90 degrees)
+  case 'H':  // SET HEADING (example: H90.0 for 90 degrees)
       headingPID.SetMode(MANUAL);  // Pause PID
       delay(50);  // Give Serial time to receive full value
       if (Serial.available()) {
@@ -690,7 +741,7 @@ void handleSerialCommand(char command) {
       headingPID.SetMode(AUTOMATIC);  // Reactivate PID
       break;
 
-  case 'P':  // Justera Kp (ex: P4.5)
+  case 'P':  // ADJUST Kp (ex: P4.5)
     if (Serial.available()) {
       Kp = Serial.parseFloat();
       headingPID.SetTunings(Kp, Ki, Kd);
@@ -700,7 +751,7 @@ void handleSerialCommand(char command) {
     }
     break;
 
-  case 'I':  // Justera Ki (ex: I0.2)
+  case 'I':  // ADJUST Ki (ex: I0.2)
     if (Serial.available()) {
       Ki = Serial.parseFloat();
       headingPID.SetTunings(Kp, Ki, Kd);
@@ -710,7 +761,7 @@ void handleSerialCommand(char command) {
     }
     break;
 
-  case 'D':  // Justera Kd (ex: D1.0)
+  case 'D':  // ADJUST Kd (ex: D1.0)
     if (Serial.available()) {
       Kd = Serial.parseFloat();
       headingPID.SetTunings(Kp, Ki, Kd);
@@ -727,7 +778,7 @@ void handleSerialCommand(char command) {
       Serial.println(F("Sweep + Compass deactivated"));
       break;
 
-  case 'O':  // Visa status
+  case 'O':  // SHOW STATUS
     updateHeading();
     Serial.print(F("Current Heading: "));
     Serial.println(currentHeading);
@@ -743,7 +794,7 @@ void handleSerialCommand(char command) {
   Serial.println(F("Unknown Command"));
   break;
 
-  case 'X':  // Aktivera/avaktivera kompass via seriell
+  case 'X':  // ACTIVATE/DEACTIVATE COMPASS 
     useMagnetometer = !useMagnetometer;
     Serial.print(F("Magnetometer is now "));
     Serial.println(useMagnetometer ? "ENABLED" : "DISABLED");
