@@ -4,13 +4,13 @@
 // ADJUST int baseSpeed = 35; AND int maxSpeed = 50; TO FIT YOU ELECTRIC MOTOR. 
 
 #include <Arduino.h>
-#include <L298N.h>  
-#include <EEPROM.h>
+#include <L298N.h>  //L298N Andrea Lombardo
+#include <EEPROM.h> 
 #include <SoftwareSerial.h> 
-#include <MotorDriver.h>
+#include <MotorDriver.h> // Yfrobot Motor driver
 #include <Wire.h>
-#include <Adafruit_HMC5883_U.h>
-#include <PID_v1.h>
+#include <Adafruit_HMC5883_U.h> // Adafruit Unified + Unified Sensor
+#include <PID_v1.h> // PID Brett Beareguard
 
 // Initialize HMC5883L magnetometer
 Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
