@@ -25,7 +25,7 @@ double targetHeading = 0; // This is your REAL target
 double userSetpoint = 0;      // The heading the user wants (e.g. 33°)
 double currentHeading = 0;    // Filtered, current heading (0–360°)
 double pidInput = 0;          // What the PID controller reads as "input"
-double pidOutput = 0;         // PID controller output to motor
+double pidOutput = 0;         // PID controller output to motorf
 double pidSetpoint = 0;       // PID setpoint (always zero when using diff!)
 
 // PID tuning constants (adjust as needed)
@@ -41,9 +41,70 @@ const double alpha = 0.5;         // Filter factor. Higher = Faster
 double rawHeading = 0;            // Raw data
 
 //------------------------------------------
-// HC05 PIN LAYOUT
+// PIN LAYOUT
 //------------------------------------------
-SoftwareSerial BTserial(8, 13); // HC-05 RX | TX
+// Välj kort
+#define BOARD_UNO     0
+#define BOARD_D1_R32  1
+#define BOARD_MEGA    2
+
+int boardType = 1; // 0 = UNO, 1 = D1 R32, 2 = MEGA
+
+// Globala pinvariabler
+int EN, IN1, IN2, posSw, rotSw1, rotSw2, buzzerPin, pedalButton, hallSensorPin, btRxPin, btTxPin;
+
+// Bluetooth Serial
+SoftwareSerial BTserial(8, 13); // Default pins, ändras i setupPinsByBoard()
+
+// Byt alla dina andra ställen i koden till att använda t.ex. buzzerPin istället för BUZZER_PIN osv!
+
+void setupPinsByBoard() {
+  switch (boardType) {
+    case BOARD_UNO:
+      EN           = 3;
+      IN1          = 12;
+      IN2          = 9;
+      posSw        = 7;
+      rotSw1       = 6;
+      rotSw2       = 11;
+      buzzerPin    = 10;
+      pedalButton  = 5;
+      hallSensorPin = A1;
+      btRxPin      = 8;
+      btTxPin      = 13;
+      break;
+    case BOARD_D1_R32:
+      EN           = 18;
+      IN1          = 19;
+      IN2          = 21;
+      posSw        = 23;
+      rotSw1       = 25;
+      rotSw2       = 26;
+      buzzerPin    = 27;
+      pedalButton  = 14;
+      hallSensorPin = 32;
+      btRxPin      = 16; // (kan ändras efter behov)
+      btTxPin      = 17;
+      break;
+    case BOARD_MEGA:
+      EN           = 4;
+      IN1          = 5;
+      IN2          = 6;
+      posSw        = 22;
+      rotSw1       = 24;
+      rotSw2       = 26;
+      buzzerPin    = 28;
+      pedalButton  = 30;
+      hallSensorPin = 32;
+      btRxPin      = 15;
+      btTxPin      = 14;
+      break;
+    default:
+      Serial.println("Okänt kort! Kontrollera boardType.");
+      while (1);
+      break;
+  }
+}
 
 //-------------------------------------------
 // Choose between 1 (L298P) or 2 (L298N);
@@ -63,11 +124,11 @@ bool useMagnetometer = true;
 // ----------------------------
 //   PIN CONFIGURATION
 // ----------------------------
-int EN, IN1, IN2, posSw, rotSw1, rotSw2, buzzerPin;
+//int EN, IN1, IN2, posSw, rotSw1, rotSw2, buzzerPin;
 L298N* myMotor = nullptr;
 
-int pedalButton = 5; // Button on the printed pedal or somewhere that will be used when you don't have the possibility to press both buttons left+right
-int hallSensorPin = A1;  // Digital pin for hallsensor
+//int pedalButton = 5; // Button on the printed pedal or somewhere that will be used when you don't have the possibility to press both buttons left+right
+//int hallSensorPin = A1;  // Digital pin for hallsensor
 
 
 // ----------------------------
@@ -261,7 +322,12 @@ void setup() {
   updateHeading();
   loadSettings();
   loadPIDValues();
+  setupPinsByBoard();
 
+   setupPinsByBoard();
+  BTserial = new SoftwareSerial(btRxPin, btTxPin);
+  BTserial->begin(9600);
+  
   EEPROM.get(20, motorDirection); // Load motor direction from calibration saved in EEPROM
   if (motorDirection != 1 && motorDirection != -1) {
       motorDirection = 1; // Default if invalid data
@@ -299,28 +365,17 @@ void setup() {
   headingPID.SetMode(AUTOMATIC);
   headingPID.SetOutputLimits(-255, 255); // Motor PWM range
 
-  // Select motor driver and corresponding I/O configuration, different depending on the motor driver
-  // Motor Driver is set above at "int driverMode = 1;"
-  if (driverMode == 1) { // Shield board "Aliexpress board" L298NH/L298P
-    Serial.println(F("L298P"));
-    IN1 = 12;  // Direction (HIGH = Forward, LOW = Backward)
-    EN  = 3;   // PWM control for speed
-    IN2 = 9;   // Brake
-    posSw   = 7; // Rotation position pin
-    rotSw1  = 6; // Turn right
-    rotSw2  = 11; // Turn left
-    buzzerPin = 10;
-  } else if (driverMode == 2) { // External boarn L298H 
-      Serial.println(F("L298N"));
-      EN  = 10;
-      IN1 = 9;
-      IN2 = 8;
-      posSw   = 4;
-      rotSw1  = 3;
-      rotSw2  = 2;
-      buzzerPin = 7;
-      myMotor = new L298N(EN, IN1, IN2); // Create motor driver
-    } 
+    if (driverMode == 2) { // External board L298N 
+    Serial.println(F("L298N"));
+    EN  = 10;
+    IN1 = 9;
+    IN2 = 8;
+    posSw   = 4;
+    rotSw1  = 3;
+    rotSw2  = 2;
+    buzzerPin = 7;
+    myMotor = new L298N(EN, IN1, IN2); // Create motor driver
+    }
 
     // Configure pins as output or input
     pinMode(EN, OUTPUT);
