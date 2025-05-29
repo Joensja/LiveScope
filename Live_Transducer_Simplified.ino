@@ -32,6 +32,51 @@
   (c) Joens / Live Transducer Pole, 2024
 ---------------------------------------------------------
 */
+/*
+  -----------------------------------------------
+  I/O OVERVIEW – ARDUINO MOTOR CONTROL / L298N
+  -----------------------------------------------
+
+  OUTPUTS:
+    EN         - Motor driver PWM (speed control)
+    IN1        - Motor driver direction 1
+    IN2        - Motor driver direction 2
+    buzzerPin  - Buzzer for sound feedback
+
+  INPUTS:
+    posSw         - Position switch (limit/end stop)
+    rotSw1        - Rotation button 1 (right)
+    rotSw2        - Rotation button 2 (left)
+    pedalButton   - Pedal button (same function as both rotation buttons)
+    hallSensorPin - Hall sensor for alternative end stop detection
+
+  BLUETOOTH:
+    btRxPin - Bluetooth RX (receiver)
+    btTxPin - Bluetooth TX (transmitter)
+
+  NOTES:
+    - All inputs are active LOW.
+    - PinMode for all I/O is set in setup().
+    - Pin numbers are assigned automatically by boardType (see setupPinsByBoard()).
+
+  PINOUT TABLE (Default Assignments):
+
+    | Function         | Arduino UNO | D1 R32 (ESP32) |
+    |------------------|:-----------:|:--------------:|
+    | EN (PWM)         |     3       |     18         |
+    | IN1              |    12       |     19         |
+    | IN2              |     9       |     21         |
+    | posSw            |     7       |     23         |
+    | rotSw1           |     6       |     25         |
+    | rotSw2           |    11       |     26         |
+    | buzzerPin        |    10       |     27         |
+    | pedalButton      |     5       |     14         |
+    | hallSensorPin    |    A1       |     32         |
+    | btRxPin          |     8       |     16         |
+    | btTxPin          |    13       |     17         |
+
+  -----------------------------------------------
+*/
 
 
 #pragma GCC optimize ("Os")
