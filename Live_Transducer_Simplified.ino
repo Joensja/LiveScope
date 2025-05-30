@@ -108,12 +108,14 @@ L298N* myMotor = nullptr;         // Motor driver object
 bool sweepModeActive = false;     // True if sweep mode is active
 bool bothPressing = false;        // True if both buttons are being pressed
 bool useHallSensor = false;       // If true, use hall sensor; else use position switch
+bool sweepTimeoutAlarm = false;      // Timeout alarm flag
 
-int motorSpeed = 100;             // Single speed for both manual and sweep
-int lastDirection = 1;            // Last direction for sweep mode (1 = right, -1 = left)
+int motorSpeed = 100;
+int lastDirection = 1;
 
 unsigned long lastPosSwPress = 0;      // Debounce for sensor
 unsigned long posSwDebounceTime = 400; // Debounce time for sensor
+unsigned long sweepTimeoutMs = 6000; // Default timeout 6 s
 
 //---------------------------------------------------------
 // FORWARD DECLARATIONS
@@ -258,10 +260,33 @@ void loop() {
     BTserial.write(data);
     handleSerialCommand(data); 
   }
+
   if (BTserial.available()) {
-    char data = BTserial.read();
-    // Bluetooth: + = faster, - = slower
-    switch (data) {
+  char data = BTserial.read();
+  // Bluetooth: + = faster, - = slower, T = set timeout
+  switch (data) {
+    // ... your existing cases
+    case 'T': { // Set sweep timeout in seconds, e.g. "T12" for 12s
+      delay(50); // Wait for number
+      String numStr = "";
+      while (BTserial.available()) {
+        char c = BTserial.read();
+        if (isDigit(c)) numStr += c;
+        else break;
+      }
+      if (numStr.length() > 0) {
+        unsigned long newTimeout = numStr.toInt();
+        if (newTimeout >= 2 && newTimeout <= 60) { // 2–60 seconds allowed
+          sweepTimeoutMs = newTimeout * 1000UL;
+          BTserial.print(F("Sweep timeout set to: "));
+          BTserial.print(newTimeout);
+          BTserial.println(F(" s"));
+        } else {
+          BTserial.println(F("Timeout must be 2–60 seconds"));
+        }
+      }
+      break;
+    }
       case '+': saveSpeed(min(motorSpeed + 25, 250)); BTserial.print(F("Speed: ")); BTserial.println(motorSpeed); break;
       case '-': saveSpeed(max(motorSpeed - 25, 50));  BTserial.print(F("Speed: ")); BTserial.println(motorSpeed); break;
       case 'O':  // Request all current settings
@@ -276,11 +301,17 @@ void loop() {
         BTserial.print(F("Board type: "));
         BTserial.println(boardType);
 
+        BTserial.print(F("Sweep Timeout (s): "));
+        BTserial.println(sweepTimeoutMs / 1000);
+
+        BTserial.print(F("Timeout Alarm: "));
+        BTserial.println(sweepTimeoutAlarm ? "YES" : "NO");
+
         BTserial.println(F("=== End of Report ==="));
         Serial.println(F("[BT] Sent system status report"));
       break;
-    }
   }
+}
 
   // Read button states
   bool sw1 = (digitalRead(rotSw1) == LOW);
@@ -385,6 +416,7 @@ void checkBothLongestPress(bool sw1, bool sw2) {
 //---------------------------------------------------------
 void runsweepmaticMode() {
   sweepModeActive = true;
+  sweepTimeoutAlarm = false; // Reset alarm status on entry
   beepMultiple(1);    // Single beep on start
   stopAllMotors();
   delay(500);
@@ -399,22 +431,40 @@ void runsweepmaticMode() {
     if (sweepDirection == 1) myMotor->forward();
     else myMotor->backward();
 
-    // Wait for trigger
+    // --- Timeout protection: start timing for this sweep
+    unsigned long sweepStartTime = millis();
     bool triggered = false;
+
+    // Wait until trigger or timeout occurs
     while (!triggered && sweepModeActive) {
       checkModeExit();
       if (!sweepModeActive) break;
 
+      // If limit switch or hall sensor is activated (with debounce)
       if (isSensorActive() && millis() - lastPosSwPress > posSwDebounceTime) {
         lastPosSwPress = millis();
         triggered = true;
+        break;
       }
-      delay(10);
+
+      // Timeout: if max allowed time is exceeded without a trigger
+      if (millis() - sweepStartTime > sweepTimeoutMs) {
+        stopAllMotors();
+        beepMultiple(5); // Sound alarm: 5 beeps
+        Serial.println(F("[ALARM] Timeout! No trigger within max time. Sweep mode stopped."));
+        BTserial.println(F("[ALARM] Timeout! No trigger within max time. Sweep mode stopped."));
+        sweepTimeoutAlarm = true; // Set alarm flag
+        sweepModeActive = false;  // Stop sweep mode
+        delay(1000);
+        return;
+      }
+      delay(10); // Short delay to reduce CPU usage
     }
     stopAllMotors();
     delay(500);
 
-    sweepDirection = -sweepDirection; // Reverse direction
+    // Reverse sweep direction after each successful trigger
+    sweepDirection = -sweepDirection;
     lastDirection = sweepDirection;
   }
   stopAllMotors();
