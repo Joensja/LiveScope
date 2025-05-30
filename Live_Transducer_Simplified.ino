@@ -264,6 +264,21 @@ void loop() {
     switch (data) {
       case '+': saveSpeed(min(motorSpeed + 25, 250)); BTserial.print(F("Speed: ")); BTserial.println(motorSpeed); break;
       case '-': saveSpeed(max(motorSpeed - 25, 50));  BTserial.print(F("Speed: ")); BTserial.println(motorSpeed); break;
+      case 'O':  // Request all current settings
+        BTserial.println(F("=== Current System Status ==="));
+
+        BTserial.print(F("Motor Speed: "));
+        BTserial.println(motorSpeed);
+
+        BTserial.print(F("Sweep Mode: "));
+        BTserial.println(sweepModeActive ? "Active" : "Inactive");
+
+        BTserial.print(F("Board type: "));
+        BTserial.println(boardType);
+
+        BTserial.println(F("=== End of Report ==="));
+        Serial.println(F("[BT] Sent system status report"));
+      break;
     }
   }
 
@@ -441,7 +456,7 @@ void setMotorSpeed() {
   unsigned long holdStart = 0;
   const unsigned long buttonDebounce = 300;
   const unsigned long exitHoldTime = 3000;
-  const int minSpeed = 50;
+  const int minSpeed = 75;
   const int maxSpeed = 250;
 
   while (!exitMenu) {
