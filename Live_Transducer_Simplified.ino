@@ -92,7 +92,7 @@ bool bothPressing = false;       // True: both rotation buttons or pedal held
 bool useHallSensor = false;      // If true, hall sensor is used as endstop instead of posSw
 bool sweepTimeoutAlarm = false;  // True if sweep timeout occurred
 
-int motorSpeed = 100;            // Motor speed (50-250 typical, 0-255 possible)
+int motorSpeed = 125;            // Motor speed (50-250 typical, 0-255 possible)
 int lastDirection = 1;           // Remember last direction (1 = right, -1 = left)
 
 unsigned long lastPosSwPress = 0;      // For sensor debounce
@@ -215,7 +215,7 @@ void setup() {
 
   // Load last speed from EEPROM, or set default
   int savedSpeed = EEPROM.read(0);
-  if (savedSpeed >= 50 && savedSpeed <= 250) motorSpeed = savedSpeed;
+  if (savedSpeed >= 75 && savedSpeed <= 250) motorSpeed = savedSpeed;
   else motorSpeed = 125;
 }
 
@@ -287,8 +287,8 @@ void loop() {
 
 // ----------- MENU EXIT (hold both buttons/pedal for exit) --------------
 
-// Return true if both rotation buttons or pedal held for a period (default 3s)
-bool checkHoldToExit(unsigned long &holdStart, unsigned long exitHoldTime = 3000) {
+// Return true if both rotation buttons or pedal held for a period (default 500ms)
+bool checkHoldToExit(unsigned long &holdStart, unsigned long exitHoldTime = 500) {
   bool sw1 = (digitalRead(rotSw1) == LOW);
   bool sw2 = (digitalRead(rotSw2) == LOW);
   bool pedal = isPedalPressed();
@@ -332,7 +332,7 @@ void checkBothLongestPress(bool sw1, bool sw2) {
             releaseLogged = true;
             delay(50); // Button release debounce
 
-            if (held >= 3000) {   // Hold >5 seconds = enter speed menu
+            if (held >= 3000) {   // Hold >3 seconds = enter speed menu
                 beepMultipleDuration(3, 100);
                 setMotorSpeed();
             } 
@@ -465,7 +465,7 @@ void setMotorSpeed() {
   unsigned long lastButtonPress = 0;
   unsigned long holdStart = 0;
   const unsigned long buttonDebounce = 300;
-  const unsigned long exitHoldTime = 3000;
+  const unsigned long exitHoldTime = 500;
   const int minSpeed = 75;
   const int maxSpeed = 250;
 
@@ -473,10 +473,10 @@ void setMotorSpeed() {
     bool sw1 = (digitalRead(rotSw1) == LOW);
     bool sw2 = (digitalRead(rotSw2) == LOW);
 
-    // Exit menu if both buttons or pedal held for 3s
+    // Exit menu if both buttons or pedal held for 500ms
     if (checkHoldToExit(holdStart)) {
       Serial.println(F("Exiting Speed Menu"));
-      delay(1000);
+      delay(500);
       break;
     }
     // Increase speed
@@ -499,7 +499,7 @@ void setMotorSpeed() {
         Serial.print(F("Speed: ")); Serial.println(motorSpeed);
         beepLong();
       } else {
-        Serial.println(F("MIN (50)"));
+        Serial.println(F("MIN (75)"));
         beepMinMaxAlert();
       }
     }
