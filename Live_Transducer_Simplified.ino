@@ -298,20 +298,24 @@ void loop() {
         break;
       }
       case 'O': // Output current system status
-        BTserial.println(F("=== Current System Status ==="));
-        BTserial.print(F("Motor Speed: ")); BTserial.println(motorSpeed);
-        BTserial.print(F("Sweep Mode: ")); BTserial.println(sweepModeActive ? "Active" : "Inactive");
-        BTserial.print(F("Sweep Timeout (s): ")); BTserial.println(sweepTimeoutMs / 1000);
-        BTserial.print(F("Timeout Alarm: ")); BTserial.println(sweepTimeoutAlarm ? "YES" : "NO");
-        BTserial.println(F("=== End of Report ==="));
-        Serial.println(F("[BT] Sent system status report"));
+        BTserial.println(F("=Status="));
+        delay(70);
+        BTserial.print(F("Speed: ")); BTserial.println(motorSpeed);
+        delay(70);
+        BTserial.print(F("Alarm Timeout: ")); BTserial.println(sweepTimeoutMs / 1000);
+        delay(70);
+        BTserial.print(F("Time Alarm.: ")); BTserial.println(sweepTimeoutAlarm ? "YES" : "NO");
+        delay(70);
         BTserial.print(F("Sweep Mode Type: "));
         BTserial.println(sweepModeType == SWEEP_SWITCH ? "SWITCH" : "TIME");
+        delay(70);
         if (sweepModeType == SWEEP_TIME) {
-          BTserial.print(F("Sweep Time per direction: "));
+          BTserial.print(F("Sweep Time: "));
           BTserial.print(sweepTimeMs / 1000);
           BTserial.println(F(" s"));
+          delay(70);
         }
+        BTserial.println(F("=End="));
         break;
     }
   }
