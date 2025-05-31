@@ -2,7 +2,7 @@
 ---------------------------------------------------------
   Arduino Motor Control with L298N, Sweep Mode, and Bluetooth Speed Adjustment
 ---------------------------------------------------------
-  This code controls a DC motor via the L298N H-bridge driver, using either an Arduino UNO or D1 R32 board.
+  This code controls a DC motor via the L298P H-bridge driver, using an Arduino UNO
   The motor can be operated in two modes: manual mode (with two rotation buttons) or automatic sweep mode.
   
   Main features:
@@ -15,13 +15,12 @@
          - Button menu (hold both rotation buttons or pedal >5s to enter speed setting)
     - Long/short button presses control mode switching:
          - Short press (>0.3s): Start sweep mode.
-         - Long press (>5s): Enter speed adjustment menu.
+         - Long press (>3s): Enter speed adjustment menu.
     - Sweep mode and menus can be exited by holding any button or the pedal for 3 seconds.
     - Uses EEPROM to store last set speed across power cycles.
     - Includes buzzer/beep feedback for menu actions and limits.
 
-  Wiring/pins are selectable for UNO or D1 R32 via the boardType variable.
-  The code uses SoftwareSerial for Bluetooth communication, but note that some boards may require adjustments.
+ The code uses SoftwareSerial for Bluetooth communication, but note that some boards may require adjustments.
   
   NOTE: 
     - To use hall sensor as the sweep trigger, set 'useHallSensor' to true.
@@ -58,142 +57,113 @@
     - All inputs are active LOW.
     - PinMode for all I/O is set in setup().
     - Pin numbers are assigned automatically by boardType (see setupPinsByBoard()).
-
-  PINOUT TABLE (Default Assignments):
-
-    | Function         | Arduino UNO | D1 R32 (ESP32) |
-    |------------------|:-----------:|:--------------:|
-    | EN (PWM)         |     3       |     18         |
-    | IN1              |    12       |     19         |
-    | IN2              |     9       |     21         |
-    | posSw            |     7       |     23         |
-    | rotSw1           |     6       |     25         |
-    | rotSw2           |    11       |     26         |
-    | buzzerPin        |    10       |     27         |
-    | pedalButton      |     5       |     14         |
-    | hallSensorPin    |    A1       |     32         |
-    | btRxPin          |     8       |     16         |
-    | btTxPin          |    13       |     17         |
-
-  -----------------------------------------------
 */
 
 
-#pragma GCC optimize ("Os")
 #include <Arduino.h>
-#include <L298N.h>
 #include <EEPROM.h>
-#include <SoftwareSerial.h>
+#include <SoftwareSerial.h>   // For Bluetooth HC-05 etc
 
-//---------------------------------------------------------
-// BOARD AND PIN SETTINGS
-//---------------------------------------------------------
-#define BOARD_UNO     0
-#define BOARD_D1_R32  1
+// --- Pin Definitions ---
+// Motor A (L298P)
+// IN1: Direction (HIGH = Forward, LOW = Backward)
+const int IN1 = 12;
+// EN:  PWM (speed)
+const int EN = 3;
+// IN2: Brake (LOW = drive, HIGH = brake/stop)
+const int IN2 = 9;
 
-int boardType = 1; // 0 = UNO, 1 = D1 R32
+// IO for buttons/sensors
+const int posSw = 7;          // Position switch (limit switch)
+const int rotSw1 = 6;         // Right rotation button
+const int rotSw2 = 11;        // Left rotation button
+const int buzzerPin = 10;     // Piezo buzzer
+const int pedalButton = 5;    // Pedal button (alternative to rotation buttons)
+const int hallSensorPin = A1; // Hall-effect sensor (optional as limit switch)
 
-// Global pin variables (will be set in setupPinsByBoard)
-int EN, IN1, IN2, posSw, rotSw1, rotSw2, buzzerPin, pedalButton, hallSensorPin, btRxPin, btTxPin;
-
-// Bluetooth serial (can be re-routed per board)
+// Bluetooth pins (UNO)
 #define BTRX_PIN 8
 #define BTTX_PIN 13
 SoftwareSerial BTserial(BTRX_PIN, BTTX_PIN);
 
-//---------------------------------------------------------
-// GLOBALS
-//---------------------------------------------------------
-L298N* myMotor = nullptr;         // Motor driver object
-bool sweepModeActive = false;     // True if sweep mode is active
-bool bothPressing = false;        // True if both buttons are being pressed
-bool useHallSensor = false;       // If true, use hall sensor; else use position switch
-bool sweepTimeoutAlarm = false;      // Timeout alarm flag
+// --- Global variables ---
+bool sweepModeActive = false;    // True: sweep mode is running
+bool bothPressing = false;       // True: both rotation buttons or pedal held
+bool useHallSensor = false;      // If true, hall sensor is used as endstop instead of posSw
+bool sweepTimeoutAlarm = false;  // True if sweep timeout occurred
 
-int motorSpeed = 100;
-int lastDirection = 1;
+int motorSpeed = 100;            // Motor speed (50-250 typical, 0-255 possible)
+int lastDirection = 1;           // Remember last direction (1 = right, -1 = left)
 
-unsigned long lastPosSwPress = 0;      // Debounce for sensor
-unsigned long posSwDebounceTime = 400; // Debounce time for sensor
-unsigned long sweepTimeoutMs = 6000; // Default timeout 6 s
+unsigned long lastPosSwPress = 0;      // For sensor debounce
+unsigned long posSwDebounceTime = 400; // ms, debounce time for limit switch/hall
+unsigned long sweepTimeoutMs = 6000;   // ms, max sweep time before alarm
 
-//---------------------------------------------------------
-// FORWARD DECLARATIONS
-//---------------------------------------------------------
-void setupPinsByBoard();
-void checkBothLongestPress(bool sw1, bool sw2);
-void runsweepmaticMode();
-void runManualMode(bool sw1, bool sw2);
-void stopAllMotors();
-void beepMultiple(int n);
-void beepMultipleDuration(int n, int duration);
-void beepLong();
-void beepMinMaxAlert();
-void setMotorSpeed();
-void updateDebounceTime();
-void checkModeExit();
-void handleSerialCommand(char command);
-bool isSensorActive();
-bool isPedalPressed();
+// --------------------- Motor control functions ----------------------
 
-//---------------------------------------------------------
-// SETUP PIN LAYOUT FOR EACH BOARD
-//---------------------------------------------------------
-void setupPinsByBoard() {
-  switch (boardType) {
-    case BOARD_UNO:
-      EN           = 3;
-      IN1          = 12;
-      IN2          = 9;
-      posSw        = 7;
-      rotSw1       = 6;
-      rotSw2       = 11;
-      buzzerPin    = 10;
-      pedalButton  = 5;
-      hallSensorPin = A1;
-      btRxPin      = 8;
-      btTxPin      = 13;
-      break;
-    case BOARD_D1_R32:
-      EN           = 18;
-      IN1          = 19;
-      IN2          = 21;
-      posSw        = 23;
-      rotSw1       = 25;
-      rotSw2       = 26;
-      buzzerPin    = 27;
-      pedalButton  = 14;
-      hallSensorPin = 32;
-      btRxPin      = 16;
-      btTxPin      = 17;
-      break;
-    default:
-      Serial.println("Unknown board! Check boardType variable.");
-      while (1);
+// Run motor forward (right)
+void motorForward(int speed) {
+  digitalWrite(IN1, HIGH);    // Set direction forward
+  digitalWrite(IN2, LOW);     // Brake off
+  analogWrite(EN, speed);     // Set speed (0-255)
+}
+
+// Run motor backward (left)
+void motorBackward(int speed) {
+  digitalWrite(IN1, LOW);     // Set direction backward
+  digitalWrite(IN2, LOW);     // Brake off
+  analogWrite(EN, speed);     // Set speed (0-255)
+}
+
+// Stop the motor (release)
+void motorStop() {
+  analogWrite(EN, 0);         // No speed (coast/stop)
+  digitalWrite(IN2, LOW);     // Brake off
+}
+
+// (Optional) active brake
+void motorBrake() {
+  analogWrite(EN, 0);         // No PWM
+  digitalWrite(IN2, HIGH);    // Brake ON
+}
+
+// --------------------- Buzzer feedback helpers ----------------------
+
+// Beep the buzzer n times with 250ms beeps
+void beepMultiple(int n) {
+  for (int i = 0; i < n; i++) {
+    tone(buzzerPin, 1000); delay(250); noTone(buzzerPin); delay(250);
   }
 }
 
-//---------------------------------------------------------
-// SAVE SPEED TO EEPROM IF CHANGED
-//---------------------------------------------------------
-void saveSpeed(int newSpeed) {
-  if (motorSpeed != newSpeed) {
-    motorSpeed = newSpeed;
-    EEPROM.write(0, newSpeed);
-    if (myMotor) myMotor->setSpeed(motorSpeed);
+// Beep n times with custom beep duration (duration in ms)
+void beepMultipleDuration(int n, int duration) {
+  for (int i = 0; i < n; i++) {
+    tone(buzzerPin, 1000); delay(duration); noTone(buzzerPin); delay(200);
   }
 }
 
-//---------------------------------------------------------
-// PEDAL BUTTON WITH DEBOUNCE
-//---------------------------------------------------------
+// Single long beep for feedback
+void beepLong() {
+  tone(buzzerPin, 1000); delay(400); noTone(buzzerPin);
+}
+
+// Special beep pattern for min/max speed alert
+void beepMinMaxAlert() {
+  tone(buzzerPin, 1000); delay(100); noTone(buzzerPin); delay(100);
+  tone(buzzerPin, 1000); delay(100); noTone(buzzerPin); delay(200);
+  tone(buzzerPin, 1000); delay(400); noTone(buzzerPin); delay(200);
+  tone(buzzerPin, 1000); delay(400); noTone(buzzerPin);
+}
+
+// --------------------- Pedal Debounce Function ----------------------
+
+// Check if pedal is pressed (with debounce)
 bool isPedalPressed() {
   static unsigned long lastDebounceTime = 0;
   static bool lastState = HIGH;
-  bool currentState = digitalRead(pedalButton) == LOW;
-
+  bool currentState = digitalRead(pedalButton) == LOW; // active low
   if (currentState != lastState) lastDebounceTime = millis();
-
   if ((millis() - lastDebounceTime) > 50) {
     if (currentState) {
       lastState = currentState;
@@ -204,141 +174,129 @@ bool isPedalPressed() {
   return false;
 }
 
-//---------------------------------------------------------
-// CHECK IF SENSOR (HALL OR POS) IS TRIGGERED
-//---------------------------------------------------------
+// --------------------- Limit Sensor Function ------------------------
+
+// Return true if currently active (limit switch or hall sensor triggered)
 bool isSensorActive() {
   if (useHallSensor) return digitalRead(hallSensorPin) == LOW;
   else return digitalRead(posSw) == LOW;
 }
 
-//---------------------------------------------------------
-// ARDUINO SETUP
-//---------------------------------------------------------
+// Stop all motors (here only M1 is used)
+void stopAllMotors() {
+  motorStop();
+}
+
+// Save new speed to EEPROM if changed
+void saveSpeed(int newSpeed) {
+  if (motorSpeed != newSpeed) {
+    motorSpeed = newSpeed;
+    EEPROM.write(0, newSpeed); // Save to address 0
+  }
+}
+
+// --------------------------- Arduino SETUP --------------------------
 void setup() {
-  Serial.begin(9600);
-  BTserial.begin(9600);
-  setupPinsByBoard();
+  Serial.begin(9600);           // Debug/monitor serial
+  BTserial.begin(9600);         // Bluetooth serial
 
-  // Set all pin modes
-  pinMode(EN, OUTPUT);
+  // Set input/output pins
   pinMode(IN1, OUTPUT);
+  pinMode(EN, OUTPUT);
   pinMode(IN2, OUTPUT);
-  pinMode(posSw, INPUT_PULLUP);
-  pinMode(rotSw1, INPUT_PULLUP);
-  pinMode(rotSw2, INPUT_PULLUP);
-  pinMode(buzzerPin, OUTPUT);
-  pinMode(pedalButton, INPUT_PULLUP);
-
-  digitalWrite(EN, LOW);
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, LOW);
-
-  // Create motor driver object for L298N
-  myMotor = new L298N(EN, IN1, IN2);
-
-  // Set up sensor type (default: posSw)
+  pinMode(posSw, INPUT_PULLUP);      // Endstop
+  pinMode(rotSw1, INPUT_PULLUP);     // Button right
+  pinMode(rotSw2, INPUT_PULLUP);     // Button left
+  pinMode(buzzerPin, OUTPUT);        // Buzzer
+  pinMode(pedalButton, INPUT_PULLUP);// Pedal
   if (useHallSensor) pinMode(hallSensorPin, INPUT_PULLUP);
 
-  // Load speed from EEPROM or set default
+  motorStop(); // Ensure stopped on startup
+
+  // Load last speed from EEPROM, or set default
   int savedSpeed = EEPROM.read(0);
   if (savedSpeed >= 50 && savedSpeed <= 250) motorSpeed = savedSpeed;
   else motorSpeed = 125;
-
-  myMotor->setSpeed(motorSpeed);
-  myMotor->stop();
-
-  updateDebounceTime();
 }
 
-//---------------------------------------------------------
-// ARDUINO MAIN LOOP
-//---------------------------------------------------------
+// --------------------------- Arduino MAIN LOOP ----------------------
 void loop() {
+  // Forward serial to Bluetooth if needed (not essential for core logic)
   if (Serial.available()) {
     char data = Serial.read();
     BTserial.write(data);
-    handleSerialCommand(data); 
   }
-
+  // Handle incoming Bluetooth commands
   if (BTserial.available()) {
-  char data = BTserial.read();
-  // Bluetooth: + = faster, - = slower, T = set timeout
-  switch (data) {
-    // ... your existing cases
-    case 'T': { // Set sweep timeout in seconds, e.g. "T12" for 12s
-      delay(50); // Wait for number
-      String numStr = "";
-      while (BTserial.available()) {
-        char c = BTserial.read();
-        if (isDigit(c)) numStr += c;
-        else break;
-      }
-      if (numStr.length() > 0) {
-        unsigned long newTimeout = numStr.toInt();
-        if (newTimeout >= 2 && newTimeout <= 60) { // 2–60 seconds allowed
-          sweepTimeoutMs = newTimeout * 1000UL;
-          BTserial.print(F("Sweep timeout set to: "));
-          BTserial.print(newTimeout);
-          BTserial.println(F(" s"));
-        } else {
-          BTserial.println(F("Timeout must be 2–60 seconds"));
+    char data = BTserial.read();
+    switch (data) {
+      case 'T': { // Set sweep timeout via Bluetooth
+        delay(50);
+        String numStr = "";
+        while (BTserial.available()) {
+          char c = BTserial.read();
+          if (isDigit(c)) numStr += c;
+          else break;
         }
+        if (numStr.length() > 0) {
+          unsigned long newTimeout = numStr.toInt();
+          if (newTimeout >= 2 && newTimeout <= 60) {
+            sweepTimeoutMs = newTimeout * 1000UL;
+            BTserial.print(F("Sweep timeout set to: "));
+            BTserial.print(newTimeout);
+            BTserial.println(F(" s"));
+          } else {
+            BTserial.println(F("Timeout must be 2–60 seconds"));
+          }
+        }
+        break;
       }
-      break;
-    }
-      case '+': saveSpeed(min(motorSpeed + 25, 250)); BTserial.print(F("Speed: ")); BTserial.println(motorSpeed); break;
-      case '-': saveSpeed(max(motorSpeed - 25, 50));  BTserial.print(F("Speed: ")); BTserial.println(motorSpeed); break;
-      case 'O':  // Request all current settings
+      case '+': // Increase speed
+        saveSpeed(min(motorSpeed + 25, 250));
+        BTserial.print(F("Speed: ")); BTserial.println(motorSpeed); break;
+      case '-': // Decrease speed
+        saveSpeed(max(motorSpeed - 25, 50));
+        BTserial.print(F("Speed: ")); BTserial.println(motorSpeed); break;
+      case 'O': // Output current system status
         BTserial.println(F("=== Current System Status ==="));
-
-        BTserial.print(F("Motor Speed: "));
-        BTserial.println(motorSpeed);
-
-        BTserial.print(F("Sweep Mode: "));
-        BTserial.println(sweepModeActive ? "Active" : "Inactive");
-
-        BTserial.print(F("Board type: "));
-        BTserial.println(boardType);
-
-        BTserial.print(F("Sweep Timeout (s): "));
-        BTserial.println(sweepTimeoutMs / 1000);
-
-        BTserial.print(F("Timeout Alarm: "));
-        BTserial.println(sweepTimeoutAlarm ? "YES" : "NO");
-
+        BTserial.print(F("Motor Speed: ")); BTserial.println(motorSpeed);
+        BTserial.print(F("Sweep Mode: ")); BTserial.println(sweepModeActive ? "Active" : "Inactive");
+        BTserial.print(F("Sweep Timeout (s): ")); BTserial.println(sweepTimeoutMs / 1000);
+        BTserial.print(F("Timeout Alarm: ")); BTserial.println(sweepTimeoutAlarm ? "YES" : "NO");
         BTserial.println(F("=== End of Report ==="));
         Serial.println(F("[BT] Sent system status report"));
-      break;
+        break;
+    }
   }
-}
 
-  // Read button states
+  // Read button states (active LOW)
   bool sw1 = (digitalRead(rotSw1) == LOW);
   bool sw2 = (digitalRead(rotSw2) == LOW);
 
-  // Handle menus and sweepmode via long/short press
+  // Menu logic: Hold both buttons or pedal for menu/sweep
   checkBothLongestPress(sw1, sw2);
 
-  // Emergency stop & exit
+  // Emergency stop: hold any button
   checkModeExit();
 
-  // Manual mode is NOT run automatically here, you may want to add:
-  // runManualMode(sw1, sw2);
-  delay(20);
+  // Manual motor control: Only run when not in sweep/menu
+  runManualMode(sw1, sw2);
+
+  delay(20); // Short delay for CPU relief
 }
 
-// Returns true if both rotation buttons OR pedal are held long enough to exit menus
+// ----------- MENU EXIT (hold both buttons/pedal for exit) --------------
+
+// Return true if both rotation buttons or pedal held for a period (default 3s)
 bool checkHoldToExit(unsigned long &holdStart, unsigned long exitHoldTime = 3000) {
   bool sw1 = (digitalRead(rotSw1) == LOW);
   bool sw2 = (digitalRead(rotSw2) == LOW);
   bool pedal = isPedalPressed();
   bool exitPressed = (sw1 && sw2) || pedal;
-
   if (exitPressed) {
     if (holdStart == 0) holdStart = millis();
     if (millis() - holdStart >= exitHoldTime) {
-      beepMultiple(2); // Double beep on exit
+      beepMultiple(2); // Double beep for exit
       return true;
     }
   } else {
@@ -347,9 +305,9 @@ bool checkHoldToExit(unsigned long &holdStart, unsigned long exitHoldTime = 3000
   return false;
 }
 
-//---------------------------------------------------------
-// BUTTON LONG PRESS FUNCTION (Menu logic!)
-//---------------------------------------------------------
+// ----------- MENU LOGIC: Handle short/long press of both buttons --------
+
+// Handle both-buttons/ pedal for menu and sweep activation
 void checkBothLongestPress(bool sw1, bool sw2) {
     static unsigned long lastUpdate = 0;
     static unsigned long holdStartTime = 0;
@@ -357,10 +315,10 @@ void checkBothLongestPress(bool sw1, bool sw2) {
     static bool releaseLogged = false;
     static bool longPressTriggered = false;
 
-    // Activation: both buttons or pedal pressed
+    // Activation is either both rotation buttons or pedal held down
     bool activationPressed = (sw1 && sw2) || isPedalPressed();
 
-    if (!bothPressing && activationPressed) {  
+    if (!bothPressing && activationPressed) {  // Start of hold
         bothPressing = true;
         holdStartTime = millis();
         lastUpdate = millis();
@@ -368,40 +326,34 @@ void checkBothLongestPress(bool sw1, bool sw2) {
         releaseLogged = false;
         longPressTriggered = false;
     } 
-    else if (bothPressing && !activationPressed) {  
+    else if (bothPressing && !activationPressed) {  // Released
         if (!releaseLogged && !longPressTriggered) {  
             unsigned long held = millis() - holdStartTime;
             releaseLogged = true;
-            delay(50);
+            delay(50); // Button release debounce
 
-            if (held >= 5000) {   // Hold > 5 seconds = open speed menu
+            if (held >= 3000) {   // Hold >5 seconds = enter speed menu
                 beepMultipleDuration(3, 100);
                 setMotorSpeed();
             } 
-            else if (held >= 300) {  // Hold > 0.3 sec = start sweep mode
+            else if (held >= 300) {  // Hold >0.3s = start sweep mode
                 beepMultipleDuration(1, 300);
                 runsweepmaticMode();                
             }
         }
         bothPressing = false;
-
-        // Wait for all to be released
+        // Wait for all to be released before accepting new press
         while (digitalRead(rotSw1) == LOW || digitalRead(rotSw2) == LOW || isPedalPressed()) {
             delay(10);
         }
     } 
-    else if (bothPressing) {  
+    else if (bothPressing) {  // Holding, give feedback
         unsigned long heldTime = millis() - holdStartTime;
-
-        // Beep every second while holding (max 8s)
         if (heldTime < 8000 && millis() - lastBeepTime >= 1000) {  
-            tone(buzzerPin, 1000);
-            delay(100);
-            noTone(buzzerPin);
+            tone(buzzerPin, 1000); delay(100); noTone(buzzerPin);
             lastBeepTime = millis();
         }
-
-        // Print how long pressed for debugging
+        // Print hold time for debugging
         if (millis() - lastUpdate >= 500) {  
             Serial.print(F("[DEBUG] Held Time: "));
             Serial.print(heldTime / 1000.0, 1);
@@ -411,78 +363,76 @@ void checkBothLongestPress(bool sw1, bool sw2) {
     }
 }
 
-//---------------------------------------------------------
-// SWEEP MODE: Go to trigger, reverse, repeat until cancelled
-//---------------------------------------------------------
+// ------------------- SWEEP-MATIC MODE ------------------------------------
+
+// Run motor back and forth between two sensor triggers (limit or hall)
+// Changes direction each time, stops if button/pedal held
 void runsweepmaticMode() {
-  sweepModeActive = true;
-  sweepTimeoutAlarm = false; // Reset alarm status on entry
-  beepMultiple(1);    // Single beep on start
+  sweepModeActive = true;        // Mark sweep as active
+  sweepTimeoutAlarm = false;     // Reset timeout alarm
+  beepMultiple(1);               // One beep on start
   stopAllMotors();
   delay(500);
 
-  int sweepDirection = lastDirection; // Use previous direction
+  int sweepDirection = lastDirection; // Use last used direction
 
   while (sweepModeActive) {
-    checkModeExit();
+    checkModeExit();     // Allow emergency exit at any time
     if (!sweepModeActive) break;
 
-    myMotor->setSpeed(motorSpeed);
-    if (sweepDirection == 1) myMotor->forward();
-    else myMotor->backward();
+    // Drive in current direction (positive=forward, negative=backward)
+    if (sweepDirection == 1) motorForward(motorSpeed);
+    else motorBackward(motorSpeed);
 
-    // --- Timeout protection: start timing for this sweep
     unsigned long sweepStartTime = millis();
     bool triggered = false;
 
-    // Wait until trigger or timeout occurs
+    // Wait for sensor to trigger or timeout
     while (!triggered && sweepModeActive) {
       checkModeExit();
       if (!sweepModeActive) break;
-
-      // If limit switch or hall sensor is activated (with debounce)
+      // Triggered by limit or hall (with debounce)
       if (isSensorActive() && millis() - lastPosSwPress > posSwDebounceTime) {
         lastPosSwPress = millis();
         triggered = true;
         break;
       }
-
-      // Timeout: if max allowed time is exceeded without a trigger
+      // Timeout protection: stop sweep if stuck
       if (millis() - sweepStartTime > sweepTimeoutMs) {
         stopAllMotors();
-        beepMultiple(5); // Sound alarm: 5 beeps
+        beepMultiple(5);
         Serial.println(F("[ALARM] Timeout! No trigger within max time. Sweep mode stopped."));
         BTserial.println(F("[ALARM] Timeout! No trigger within max time. Sweep mode stopped."));
-        sweepTimeoutAlarm = true; // Set alarm flag
-        sweepModeActive = false;  // Stop sweep mode
+        sweepTimeoutAlarm = true;
+        sweepModeActive = false;
         delay(1000);
         return;
       }
-      delay(10); // Short delay to reduce CPU usage
+      delay(10); // Reduce CPU load
     }
-    stopAllMotors();
+    stopAllMotors(); // Pause at end
     delay(500);
-
-    // Reverse sweep direction after each successful trigger
+    // Reverse direction for next sweep
     sweepDirection = -sweepDirection;
     lastDirection = sweepDirection;
   }
   stopAllMotors();
 }
 
-//---------------------------------------------------------
-// MANUAL MODE: Drive right/left using buttons (add to loop if you want always-on)
-//---------------------------------------------------------
+// ------------------- MANUAL MODE -----------------------------------------
+
+// Manual motor control with rotation buttons (left/right)
+// Right = forward, left = backward, none = stop
 void runManualMode(bool sw1, bool sw2) {
   static int lastState = -1;
   static unsigned long lastPrintTime = 0;
   if (sw1 && !sw2) {
-    myMotor->setSpeed(motorSpeed); myMotor->forward(); lastDirection = 1;
+    motorForward(motorSpeed); lastDirection = 1;
     if (lastState != 1 && millis() - lastPrintTime >= 1000) {
       Serial.println(F("M Right")); lastState = 1; lastPrintTime = millis();
     }
   } else if (!sw1 && sw2) {
-    myMotor->setSpeed(motorSpeed); myMotor->backward(); lastDirection = -1;
+    motorBackward(motorSpeed); lastDirection = -1;
     if (lastState != 2 && millis() - lastPrintTime >= 1000) {
       Serial.println(F("M Left")); lastState = 2; lastPrintTime = millis();
     }
@@ -494,14 +444,13 @@ void runManualMode(bool sw1, bool sw2) {
   }
 }
 
-//---------------------------------------------------------
-// SPEED MENU (Hold both buttons >5s to enter)
-//---------------------------------------------------------
+// ------------------- SPEED MENU ------------------------------------------
+
+// Speed adjustment menu, entered by holding both buttons/pedal >5s
 void setMotorSpeed() {
   Serial.println(F("** Speed Adjustment  **"));
   stopAllMotors();
 
-  bool exitMenu = false;
   unsigned long lastButtonPress = 0;
   unsigned long holdStart = 0;
   const unsigned long buttonDebounce = 300;
@@ -509,17 +458,16 @@ void setMotorSpeed() {
   const int minSpeed = 75;
   const int maxSpeed = 250;
 
-  while (!exitMenu) {
+  while (true) {
     bool sw1 = (digitalRead(rotSw1) == LOW);
     bool sw2 = (digitalRead(rotSw2) == LOW);
 
-    // Exit speed menu if both buttons or pedal held for 3s
+    // Exit menu if both buttons or pedal held for 3s
     if (checkHoldToExit(holdStart)) {
       Serial.println(F("Exiting Speed Menu"));
       delay(1000);
       break;
     }
-
     // Increase speed
     if (sw1 && !sw2 && millis() - lastButtonPress > buttonDebounce) {
       lastButtonPress = millis();
@@ -544,20 +492,13 @@ void setMotorSpeed() {
         beepMinMaxAlert();
       }
     }
-    delay(200);
+    delay(200); // Debounce and CPU relief
   }
 }
 
-//---------------------------------------------------------
-// STOP ALL MOTORS
-//---------------------------------------------------------
-void stopAllMotors() {
-  if (myMotor) myMotor->stop();
-}
+// ------------------- EXIT/STOP CURRENT MODE ------------------------------
 
-//---------------------------------------------------------
-// EXIT/CANCEL CURRENT MODE IF ANY BUTTON IS HELD >300ms
-//---------------------------------------------------------
+// Cancel any mode if button/pedal is held >300ms (emergency stop/exit)
 void checkModeExit() {
   bool sw1 = (digitalRead(rotSw1) == LOW);
   bool sw2 = (digitalRead(rotSw2) == LOW);
@@ -576,47 +517,4 @@ void checkModeExit() {
   } else {
     pressStart = 0;
   }
-}
-
-//---------------------------------------------------------
-// SERIALL FEEDBACK
-//---------------------------------------------------------
-void handleSerialCommand(char command) {
-  // For now, just clear serial buffer and print unknown
-  while (Serial.available()) Serial.read();  // Clear buffer
-  Serial.println(F("Unknown Command"));
-}
-
-
-//---------------------------------------------------------
-// BEEP FUNCTIONS FOR FEEDBACK
-//---------------------------------------------------------
-void beepMultiple(int n) {
-  for (int i = 0; i < n; i++) {
-    tone(buzzerPin, 1000); delay(250); noTone(buzzerPin); delay(250);
-  }
-}
-void beepMultipleDuration(int n, int duration) {
-  for (int i = 0; i < n; i++) {
-    tone(buzzerPin, 1000); delay(duration); noTone(buzzerPin); delay(200);
-  }
-}
-void beepLong() {
-  tone(buzzerPin, 1000); delay(400); noTone(buzzerPin);
-}
-void beepMinMaxAlert() {
-  tone(buzzerPin, 1000); delay(100); noTone(buzzerPin); delay(100);
-  tone(buzzerPin, 1000); delay(100); noTone(buzzerPin); delay(200);
-  tone(buzzerPin, 1000); delay(400); noTone(buzzerPin); delay(200);
-  tone(buzzerPin, 1000); delay(400); noTone(buzzerPin);
-}
-
-//---------------------------------------------------------
-// UPDATE DEBOUNCE TIME (OPTIONAL)
-//---------------------------------------------------------
-void updateDebounceTime() {
-  unsigned long newDebounceTime = 450;
-  static unsigned long lastDebounceTime = 0;
-  if (newDebounceTime != lastDebounceTime) lastDebounceTime = newDebounceTime;
-  posSwDebounceTime = newDebounceTime;
 }
