@@ -367,37 +367,52 @@ void checkBothLongestPress(bool sw1, bool sw2) {
 
 // Run motor back and forth between two sensor triggers (limit or hall)
 // Changes direction each time, stops if button/pedal held
+// Sweep-matic mode: Motor moves back and forth between two sensor triggers.
+// Now: Changes direction immediately when sensor is triggered, no need to release switch.
+// After hitting endstop, waits 500ms, then reverses and keeps running (even if sensor is still pressed).
 void runsweepmaticMode() {
-  sweepModeActive = true;        // Mark sweep as active
-  sweepTimeoutAlarm = false;     // Reset timeout alarm
-  beepMultiple(1);               // One beep on start
+  sweepModeActive = true;
+  sweepTimeoutAlarm = false;
+  beepMultiple(1);
   stopAllMotors();
-  delay(500);
+  delay(300);
 
-  int sweepDirection = lastDirection; // Use last used direction
+  int sweepDirection = lastDirection;
+  unsigned long ignoreUntil = 0;   // Timestamp until which the switch is ignored
 
   while (sweepModeActive) {
-    checkModeExit();     // Allow emergency exit at any time
+    checkModeExit();
     if (!sweepModeActive) break;
 
-    // Drive in current direction (positive=forward, negative=backward)
+    // Run motor in current direction
     if (sweepDirection == 1) motorForward(motorSpeed);
     else motorBackward(motorSpeed);
 
     unsigned long sweepStartTime = millis();
-    bool triggered = false;
 
-    // Wait for sensor to trigger or timeout
-    while (!triggered && sweepModeActive) {
+    while (sweepModeActive) {
       checkModeExit();
       if (!sweepModeActive) break;
-      // Triggered by limit or hall (with debounce)
-      if (isSensorActive() && millis() - lastPosSwPress > posSwDebounceTime) {
-        lastPosSwPress = millis();
-        triggered = true;
-        break;
+
+      // Ignore the switch for 1s after direction change
+      if (millis() > ignoreUntil) {
+        if (isSensorActive()) {
+          lastPosSwPress = millis();
+
+          stopAllMotors();
+          delay(500);
+
+          // Reverse direction and keep running immediately
+          sweepDirection = -sweepDirection;
+          lastDirection = sweepDirection;
+
+          // Ignore switch for 1s (adjust as needed)
+          ignoreUntil = millis() + 2000;
+
+          break; // Start next sweep cycle right away
+        }
       }
-      // Timeout protection: stop sweep if stuck
+
       if (millis() - sweepStartTime > sweepTimeoutMs) {
         stopAllMotors();
         beepMultiple(5);
@@ -408,16 +423,12 @@ void runsweepmaticMode() {
         delay(1000);
         return;
       }
-      delay(10); // Reduce CPU load
+      delay(10);
     }
-    stopAllMotors(); // Pause at end
-    delay(500);
-    // Reverse direction for next sweep
-    sweepDirection = -sweepDirection;
-    lastDirection = sweepDirection;
   }
   stopAllMotors();
 }
+
 
 // ------------------- MANUAL MODE -----------------------------------------
 
