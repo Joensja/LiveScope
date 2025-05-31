@@ -81,6 +81,15 @@ const int buzzerPin = 10;     // Piezo buzzer
 const int pedalButton = 5;    // Pedal button (alternative to rotation buttons)
 const int hallSensorPin = A1; // Hall-effect sensor (optional as limit switch)
 
+/*  posSw   = 7; // Rotation position pin
+    rotSw1  = 6; // Turn right
+    rotSw2  = 11; // Turn left
+    buzzerPin = 10;
+    SoftwareSerial BTserial(3, 2); // RX | TX
+    */
+
+const int referencePWM = 250; // Use 250 as reference for full speed
+
 // Bluetooth pins (UNO)
 #define BTRX_PIN 8
 #define BTTX_PIN 13
@@ -98,6 +107,11 @@ int lastDirection = 1;           // Remember last direction (1 = right, -1 = lef
 unsigned long lastPosSwPress = 0;      // For sensor debounce
 unsigned long posSwDebounceTime = 400; // ms, debounce time for limit switch/hall
 unsigned long sweepTimeoutMs = 6000;   // ms, max sweep time before alarm
+unsigned long sweepTimeMs = 2000;            // Default: 2 seconds per direction
+
+
+enum SweepModeType { SWEEP_SWITCH, SWEEP_TIME };
+SweepModeType sweepModeType = SWEEP_TIME;  // Default: switch mode
 
 // --------------------- Motor control functions ----------------------
 
@@ -257,6 +271,32 @@ void loop() {
       case '-': // Decrease speed
         saveSpeed(max(motorSpeed - 25, 50));
         BTserial.print(F("Speed: ")); BTserial.println(motorSpeed); break;
+              case 'M': // Toggle sweep mode (switch/time)
+        sweepModeType = (sweepModeType == SWEEP_SWITCH) ? SWEEP_TIME : SWEEP_SWITCH;
+        BTserial.print(F("Sweep mode: "));
+        BTserial.println(sweepModeType == SWEEP_SWITCH ? "SWITCH" : "TIME");
+        break;
+      case 'S': { // Set sweep time in seconds, e.g. S6 for 6s
+        delay(20);
+        String numStr = "";
+        while (BTserial.available()) {
+          char c = BTserial.read();
+          if (isDigit(c)) numStr += c;
+          else break;
+        }
+        if (numStr.length() > 0) {
+          unsigned long newTime = numStr.toInt();
+          if (newTime >= 2 && newTime <= 60) {
+            sweepTimeMs = newTime * 1000UL;
+            BTserial.print(F("Sweep time per direction set to: "));
+            BTserial.print(newTime);
+            BTserial.println(F(" s"));
+          } else {
+            BTserial.println(F("Sweep time must be 2–60 seconds"));
+          }
+        }
+        break;
+      }
       case 'O': // Output current system status
         BTserial.println(F("=== Current System Status ==="));
         BTserial.print(F("Motor Speed: ")); BTserial.println(motorSpeed);
@@ -265,6 +305,13 @@ void loop() {
         BTserial.print(F("Timeout Alarm: ")); BTserial.println(sweepTimeoutAlarm ? "YES" : "NO");
         BTserial.println(F("=== End of Report ==="));
         Serial.println(F("[BT] Sent system status report"));
+        BTserial.print(F("Sweep Mode Type: "));
+        BTserial.println(sweepModeType == SWEEP_SWITCH ? "SWITCH" : "TIME");
+        if (sweepModeType == SWEEP_TIME) {
+          BTserial.print(F("Sweep Time per direction: "));
+          BTserial.print(sweepTimeMs / 1000);
+          BTserial.println(F(" s"));
+        }
         break;
     }
   }
@@ -377,8 +424,8 @@ void runsweepmaticMode() {
   stopAllMotors();
   delay(300);
 
-  int sweepDirection = lastDirection;
-  unsigned long ignoreUntil = 0;   // Timestamp until which the switch is ignored
+  int sweepDirection = (sweepModeType == SWEEP_TIME) ? 1 : lastDirection; // ALWAYS start in direction 1 for time sweep
+  unsigned long ignoreUntil = 0;   // For switch ignore after direction change
 
   while (sweepModeActive) {
     checkModeExit();
@@ -388,47 +435,60 @@ void runsweepmaticMode() {
     if (sweepDirection == 1) motorForward(motorSpeed);
     else motorBackward(motorSpeed);
 
-    unsigned long sweepStartTime = millis();
+    unsigned long actionStart = millis();
 
-    while (sweepModeActive) {
-      checkModeExit();
-      if (!sweepModeActive) break;
+    if (sweepModeType == SWEEP_SWITCH) {
+      // ---- SWEEP WITH SWITCH ----
+      while (sweepModeActive) {
+        checkModeExit();
+        if (!sweepModeActive) break;
 
-      // Ignore the switch for 1s after direction change
-      if (millis() > ignoreUntil) {
-        if (isSensorActive()) {
-          lastPosSwPress = millis();
+        // Ignore switch for 2s after direction change
+        if (millis() > ignoreUntil) {
+          if (isSensorActive()) {
+            stopAllMotors();
+            delay(500);
 
-          stopAllMotors();
-          delay(500);
-
-          // Reverse direction and keep running immediately
-          sweepDirection = -sweepDirection;
-          lastDirection = sweepDirection;
-
-          // Ignore switch for 1s (adjust as needed)
-          ignoreUntil = millis() + 2000;
-
-          break; // Start next sweep cycle right away
+            sweepDirection = -sweepDirection;
+            lastDirection = sweepDirection;
+            ignoreUntil = millis() + 2000; // 2s ignore
+            break;
+          }
         }
+        // Timeout safety (no endstop hit)
+        if (millis() - actionStart > sweepTimeoutMs) {
+          stopAllMotors();
+          beepMultiple(5);
+          Serial.println(F("[ALARM] Timeout! No trigger within max time. Sweep mode stopped."));
+          BTserial.println(F("[ALARM] Timeout! No trigger within max time. Sweep mode stopped."));
+          sweepTimeoutAlarm = true;
+          sweepModeActive = false;
+          delay(1000);
+          return;
+        }
+        delay(10);
+      }
+    } else if (sweepModeType == SWEEP_TIME) {
+      // ---- SWEEP WITH TIME, PWM RELATIVE ----
+      unsigned long effectiveSweepTime = sweepTimeMs;
+      if (motorSpeed > 0) {
+        effectiveSweepTime = sweepTimeMs * referencePWM / motorSpeed;
       }
 
-      if (millis() - sweepStartTime > sweepTimeoutMs) {
-        stopAllMotors();
-        beepMultiple(5);
-        Serial.println(F("[ALARM] Timeout! No trigger within max time. Sweep mode stopped."));
-        BTserial.println(F("[ALARM] Timeout! No trigger within max time. Sweep mode stopped."));
-        sweepTimeoutAlarm = true;
-        sweepModeActive = false;
-        delay(1000);
-        return;
+      unsigned long startTime = millis();
+      while ((millis() - startTime < effectiveSweepTime) && sweepModeActive) {
+        checkModeExit();
+        if (!sweepModeActive) break;
+        delay(10);
       }
-      delay(10);
+      stopAllMotors();
+      delay(500);
+      sweepDirection = -sweepDirection;
+      lastDirection = sweepDirection;
     }
   }
   stopAllMotors();
 }
-
 
 // ------------------- MANUAL MODE -----------------------------------------
 
