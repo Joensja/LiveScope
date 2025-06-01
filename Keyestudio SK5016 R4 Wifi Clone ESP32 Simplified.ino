@@ -176,17 +176,18 @@ void runSweepMode() {
 
     // Avbryt sweep med sw1 eller sw2 1s
     static unsigned long swHoldStart = 0;
-    if (isSw1Pressed() || isSw2Pressed()) {
+    if (isSw1Pressed() || isSw2Pressed() || isPedalPressed()) {
       if (swHoldStart == 0) swHoldStart = millis();
       if (millis() - swHoldStart > 500) {
         sweepActive = false;
         beepMultiple(2);
-        Serial.println("[SWEEP-DBG] Avbryter sweepmode via sw1/sw2");
+        Serial.println("[SWEEP-DBG] Avbryter sweepmode via sw1/sw2/pedal");
         break;
       }
     } else {
       swHoldStart = 0;
     }
+
 
     // Kör ett svep: Stoppa alltid innan nytt move
     stopAllMotors(); delay(50);
