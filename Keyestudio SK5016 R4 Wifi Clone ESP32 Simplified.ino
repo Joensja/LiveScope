@@ -2,6 +2,11 @@
   ------------------------------------------------------------------------------
   ESP32 Motor Control with WiFi and SpeedMenu
   ------------------------------------------------------------------------------
+  NOTE!!!!
+  I NEVER GOT THE KY003 TO WORK ON THE KEYESTUDIOS SK5016 ESP32-WROOM-32 UNIT WITH THE L298NH MOTOR SHIELD. 
+  I USED A MAGNETIC SWITCH INSTEAD ON THE INPUT FOR POSSW INSTEAD WORKS PERFECTLY!!
+  //-----------------------------------------------------------------------------
+
   This code controls a motor using an ESP32, with input from physical buttons and a web interface.
   It supports manual operation, automatic "sweep" motion, and a menu for adjusting speed.
 
@@ -58,7 +63,7 @@ int motorSpeed = 125;
 int lastDirection = 1;
 bool useHallSensor = false;
 unsigned long sweepTimeoutMs = 6000;
-unsigned long sweepTimeMs = 2000;
+unsigned long sweepTimeMs = 4000;
 const int pwmFreq = 1000;
 const int pwmResolution = 8; // 8-bit (0-255)
 
@@ -67,7 +72,7 @@ enum MainState { MANUAL_MODE, SWEEP_MODE, SPEED_MENU };
 MainState mainState = MANUAL_MODE;
 
 enum SweepModeType { SWEEP_SWITCH, SWEEP_TIME };
-SweepModeType sweepModeType = SWEEP_TIME;
+SweepModeType sweepModeType = SWEEP_SWITCH;
 bool sweepTimeoutAlarm = false;
 
 // =================== BUTTON DEBOUNCE ===================
@@ -198,48 +203,57 @@ void runSweepMode() {
     unsigned long actionStart = millis();
 
     if (sweepModeType == SWEEP_SWITCH) {
-      while (true) {
-        server.handleClient();
-        updateButton(btnSw1);
-        updateButton(btnSw2);
+  static bool lastSensor = false; // Lagrar föregående sensorstatus
 
-        Serial.printf("[SWEEP-DBG] [SWITCH] In loop: ignoreUntil=%lu, now=%lu, sensorActive=%d\n",
-          ignoreUntil, millis(), isSensorActive());
+  while (true) {
+    server.handleClient();
+    updateButton(btnSw1);
+    updateButton(btnSw2);
 
-        // Samma exit även i denna loop
-        static unsigned long innerSwHoldStart = 0;
-        if (isSw1Pressed() || isSw2Pressed()) {
-          if (innerSwHoldStart == 0) innerSwHoldStart = millis();
-          if (millis() - innerSwHoldStart > 500) {
-            sweepActive = false;
-            beepMultiple(2);
-            Serial.println("[SWEEP-DBG] Avbryter sweepmode via sw1/sw2 (inner loop)");
-            break;
-          }
-        } else {
-          innerSwHoldStart = 0;
-        }
-
-        if (!sweepActive) break;
-        if (millis() > ignoreUntil && isSensorActive()) {
-          stopAllMotors(); delay(500);
-          sweepDirection = -sweepDirection;
-          lastDirection = sweepDirection;
-          ignoreUntil = millis() + 2000;
-          Serial.printf("[SWEEP-DBG] Riktning byts! Ny sweepDirection=%d\n", sweepDirection);
-          break;
-        }
-        if (millis() - actionStart > sweepTimeoutMs) {
-          stopAllMotors();
-          beepMultiple(5);
-          Serial.println("[SWEEP-DBG] [ALARM] Timeout! Ingen trigger – sweepmode stoppad.");
-          sweepTimeoutAlarm = true;
-          sweepActive = false;
-          break;
-        }
-        delay(10);
-      }
+    // --- Edge-detection: Skriv bara ut när sensorn TRIGGAS (går från 0 till 1)
+    bool currentSensor = isSensorActive();
+    if (currentSensor && !lastSensor) {
+      Serial.printf("[SWEEP-DBG] LIMIT SWITCH TRIGGERED! (sensorActive=1) | t=%lu ms\n", millis());
     }
+    lastSensor = currentSensor;
+    // ---
+
+    // Samma exit även i denna loop
+    static unsigned long innerSwHoldStart = 0;
+    if (isSw1Pressed() || isSw2Pressed()) {
+      if (innerSwHoldStart == 0) innerSwHoldStart = millis();
+      if (millis() - innerSwHoldStart > 500) {
+        sweepActive = false;
+        beepMultiple(2);
+        Serial.println("[SWEEP-DBG] Avbryter sweepmode via sw1/sw2 (inner loop)");
+        break;
+      }
+    } else {
+      innerSwHoldStart = 0;
+    }
+
+    if (!sweepActive) break;
+
+    if (millis() > ignoreUntil && isSensorActive()) {
+      stopAllMotors(); delay(500);
+      sweepDirection = -sweepDirection;
+      lastDirection = sweepDirection;
+      ignoreUntil = millis() + 2000;
+      Serial.printf("[SWEEP-DBG] Riktning byts! Ny sweepDirection=%d\n", sweepDirection);
+      break;
+    }
+    if (millis() - actionStart > sweepTimeoutMs) {
+      stopAllMotors();
+      beepMultiple(5);
+      Serial.println("[SWEEP-DBG] [ALARM] Timeout! Ingen trigger – sweepmode stoppad.");
+      sweepTimeoutAlarm = true;
+      sweepActive = false;
+      break;
+    }
+    delay(10);
+  }
+}
+
     else if (sweepModeType == SWEEP_TIME) {
       unsigned long effectiveSweepTime = sweepTimeMs * referencePWM / max(motorSpeed, 1);
       unsigned long startTime = millis();
@@ -291,6 +305,13 @@ void runManualMode() {
     motorStop();
     if (lastState != 0) { Serial.println("M Stop"); lastState = 0; }
   }
+    // HALLSENSOR DEBUG (lägg till nedan)
+  static unsigned long lastHallDebug = 0;
+  if (millis() - lastHallDebug > 500) {  // Visa var 500 ms
+    lastHallDebug = millis();
+    int hallRaw = digitalRead(hallSensorPin);
+    Serial.printf("[HALL-DEBUG] ManualMode: HallSensorPin=%d, value=%d\n", hallSensorPin, hallRaw);
+  }
 }
 
 // =================== SPEED MENU ===================
@@ -320,16 +341,18 @@ void runSpeedMenu() {
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > 300) {
       lastDebug = millis();
-      Serial.printf("[SWEEP-DBG] SpeedMenu | speed=%d | sw1=%d sw2=%d pedal=%d\n",
-                    motorSpeed, sw1, sw2, pedal);
+      Serial.printf("[SWEEP-DBG] SpeedMenu | speed=%d | sw1=%d sw2=%d pedal=%d\n", motorSpeed, sw1, sw2, pedal);
     }
 
     // Exit på båda switchar eller pedal långtryck
     if ((sw1 && sw2) || pedal) {
       if (holdStart == 0) holdStart = millis();
-      if (millis() - holdStart > 500) {
+      if (millis() - holdStart > 1500) {
         Serial.println("[SWEEP-DBG] Exit SpeedMenu (via pedal eller båda switchar)");
         beepMultiple(2);
+        while (isPedalPressed() || (isSw1Pressed() && isSw2Pressed())) {
+          updateButton(btnPedal); updateButton(btnSw1); updateButton(btnSw2); delay(5);
+        }
         break;
       }
     } else {
@@ -434,7 +457,7 @@ void loop() {
     static unsigned long pedalHoldStart = 0;
     if (pedal) {
       if (pedalHoldStart == 0) pedalHoldStart = millis();
-      if (millis() - pedalHoldStart > 1000) {
+      if (millis() - pedalHoldStart > 500) {
         beepMultiple(2);
         mainState = MANUAL_MODE;
         pedalHoldStart = 0;
@@ -473,6 +496,13 @@ void setup() {
   pinMode(buzzerPin, OUTPUT);
   pinMode(pedalButton, INPUT_PULLUP);
   pinMode(hallSensorPin, INPUT_PULLUP);
+
+  pinMode(hallSensorPin, INPUT_PULLUP);
+  for (int i = 0; i < 20; i++) {
+    int hallRaw = digitalRead(hallSensorPin);
+    Serial.printf("KY-003 Startup check #%d: %d\n", i, hallRaw);
+    delay(250);
+  }
 
   // PWM-setup: EN (PIN) direkt!
   ledcAttach(EN, pwmFreq, pwmResolution);
