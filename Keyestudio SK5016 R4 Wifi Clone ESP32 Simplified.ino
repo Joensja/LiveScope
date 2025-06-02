@@ -41,6 +41,9 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <EEPROM.h>
+#include <ESPmDNS.h>
+#include <Update.h>
+#include <HTTPUpdateServer.h>
 
 // =================== WIFI SETTINGS ===================
 const char* ssid = "WLi-Transducer_Pole";
@@ -66,6 +69,9 @@ unsigned long sweepTimeoutMs = 6000;
 unsigned long sweepTimeMs = 4000;
 const int pwmFreq = 1000;
 const int pwmResolution = 8; // 8-bit (0-255)
+
+// UPDATE WEBSERVER
+HTTPUpdateServer httpUpdater;
 
 // =================== STATE MACHINE ===================
 enum MainState { MANUAL_MODE, SWEEP_MODE, SPEED_MENU };
@@ -529,20 +535,57 @@ void setup() {
   WiFi.setSleep(false);
   IPAddress IP = WiFi.softAPIP();
   Serial.print("Access Point started! IP: "); Serial.println(IP);
+    if (!MDNS.begin("esp32")) {  // "esp32" kan du byta till valfritt namn
+    Serial.println("Error setting up MDNS responder!");
+  }
+  httpUpdater.setup(&server);
+  Serial.println("OTA-update ready! Besök http://" + WiFi.softAPIP().toString() + "/update");
+
 
   // --------- ENDPOINTS ----------
 
   // Web-status som innan
-  server.on("/", []() {
-    String html = "<html><body>";
-    html += "<h3>ESP32 Motor Control</h3>";
-    html += "<p>Speed: " + String(motorSpeed) + "<br>";
-    html += "Sweep mode: " + String((sweepModeType == SWEEP_TIME) ? "TIME" : "SWITCH") + "<br>";
-    html += "Sweep time: " + String(sweepTimeMs / 1000) + "<br>";
-    html += "IP-address: " + WiFi.softAPIP().toString() + "</p>";
-    html += "</body></html>";
-    server.send(200, "text/html", html);
-  });
+server.on("/", []() {
+  String html = "<html><body>";
+  html += "<h3>ESP32 Motor Control</h3>";
+  html += "<form action='/set' method='get'>";
+  html += "Speed (75-250): <input type='number' name='speed' value='" + String(motorSpeed) + "' min='75' max='250'><br>";
+  html += "Sweep mode: <select name='mode'>";
+  html += "<option value='TIME'" + String(sweepModeType == SWEEP_TIME ? " selected" : "") + ">TIME</option>";
+  html += "<option value='SWITCH'" + String(sweepModeType == SWEEP_SWITCH ? " selected" : "") + ">SWITCH</option>";
+  html += "</select><br>";
+  html += "Sweep time (sek): <input type='number' name='sweeptime' value='" + String(sweepTimeMs / 1000) + "' min='1' max='30'><br>";
+  html += "Timeout (sek): <input type='number' name='timeout' value='" + String(sweepTimeoutMs / 1000) + "' min='1' max='60'><br>";
+  html += "<input type='submit' value='Spara inställningar'>";
+  html += "</form>";
+  html += "<hr><a href='/LEFT'>Kör vänster</a> | <a href='/RIGHT'>Kör höger</a> | <a href='/STOP'>Stopp</a>";
+  html += "<p>Aktuell hastighet: " + String(motorSpeed) + "</p>";
+  html += "</body></html>";
+  server.send(200, "text/html", html);
+});
+
+server.on("/set", []() {
+  if (server.hasArg("speed")) {
+    int s = server.arg("speed").toInt();
+    if (s >= 75 && s <= 250) saveSpeed(s);
+  }
+  if (server.hasArg("sweeptime")) {
+    int st = server.arg("sweeptime").toInt();
+    if (st >= 1 && st <= 30) sweepTimeMs = st * 1000;
+  }
+  if (server.hasArg("timeout")) {
+    int t = server.arg("timeout").toInt();
+    if (t >= 1 && t <= 60) sweepTimeoutMs = t * 1000;
+  }
+  if (server.hasArg("mode")) {
+    String m = server.arg("mode");
+    if (m == "TIME") sweepModeType = SWEEP_TIME;
+    else sweepModeType = SWEEP_SWITCH;
+  }
+  server.sendHeader("Location", "/"); // tillbaka till hemsidan
+  server.send(303);
+});
+
 
   // Motor åt höger
   server.on("/RIGHT", []() {
