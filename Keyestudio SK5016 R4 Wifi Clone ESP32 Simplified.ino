@@ -143,6 +143,20 @@ void beepMinMaxAlert() {
   beepLong();
 }
 
+void setSweepTimeFromApp(String param) {
+  int t = param.toInt();
+  if (t >= 1 && t <= 30) { 
+    sweepTimeMs = t * 1000;
+  }
+}
+
+void setTimeoutFromApp(String param) {
+  int t = param.toInt();
+  if (t >= 1 && t <= 60) { 
+    sweepTimeoutMs = t * 1000;
+  }
+}
+
 // =================== EEPROM ===================
 void saveSpeed(int newSpeed) {
   newSpeed = constrain(newSpeed, 75, 250);
@@ -498,16 +512,13 @@ void setup() {
   pinMode(pedalButton, INPUT_PULLUP);
   pinMode(hallSensorPin, INPUT_PULLUP);
 
-  pinMode(hallSensorPin, INPUT_PULLUP);
   for (int i = 0; i < 20; i++) {
     int hallRaw = digitalRead(hallSensorPin);
     Serial.printf("KY-003 Startup check #%d: %d\n", i, hallRaw);
     delay(250);
   }
 
-  // PWM-setup: EN (PIN) direkt!
   ledcAttach(EN, pwmFreq, pwmResolution);
-
   motorStop();
 
   int savedSpeed = EEPROM.read(0);
@@ -519,6 +530,9 @@ void setup() {
   IPAddress IP = WiFi.softAPIP();
   Serial.print("Access Point started! IP: "); Serial.println(IP);
 
+  // --------- ENDPOINTS ----------
+
+  // Web-status som innan
   server.on("/", []() {
     String html = "<html><body>";
     html += "<h3>ESP32 Motor Control</h3>";
@@ -529,5 +543,59 @@ void setup() {
     html += "</body></html>";
     server.send(200, "text/html", html);
   });
+
+  // Motor åt höger
+  server.on("/RIGHT", []() {
+    motorForward(motorSpeed);
+    server.send(200, "text/plain", "Motor åt höger! Speed: " + String(motorSpeed));
+  });
+
+  // Motor åt vänster
+  server.on("/LEFT", []() {
+    motorBackward(motorSpeed);
+    server.send(200, "text/plain", "Motor åt vänster! Speed: " + String(motorSpeed));
+  });
+
+  // Stoppa motorn
+  server.on("/STOP", []() {
+    motorStop();
+    server.send(200, "text/plain", "Motor stoppad!");
+  });
+
+  // Sätt hastighet: t.ex. /SPEED=200
+  server.onNotFound([]() {
+    String uri = server.uri();
+    if (uri.startsWith("/SPEED=")) {
+      int speed = uri.substring(7).toInt();
+      if (speed >= 75 && speed <= 250) {
+        saveSpeed(speed);
+        server.send(200, "text/plain", "OK: Hastighet satt till " + String(motorSpeed));
+      } else {
+        server.send(400, "text/plain", "Felaktig hastighet! (75-250)");
+      }
+    } else if (uri.startsWith("/SWEEPTIME=")) {
+      setSweepTimeFromApp(uri.substring(11));
+      server.send(200, "text/plain", "Sveptid satt till " + String(sweepTimeMs/1000) + " sek");
+    } else if (uri.startsWith("/TIMEOUT=")) {
+      setTimeoutFromApp(uri.substring(9));
+      server.send(200, "text/plain", "Timeout satt till " + String(sweepTimeoutMs/1000) + " sek");
+    } else if (uri.startsWith("/SWEEP")) {
+      // Starta sweepmode vid app-kommando
+      mainState = SWEEP_MODE;
+      server.send(200, "text/plain", "Sweep-läge aktiverat!");
+    } else {
+      // "status" - hämta aktuell status
+      String html = "<html><body>";
+      html += "<h3>ESP32 Motor Control</h3>";
+      html += "<p>Speed: " + String(motorSpeed) + "<br>";
+      html += "Sweep mode: " + String((sweepModeType == SWEEP_TIME) ? "TIME" : "SWITCH") + "<br>";
+      html += "Sweep time: " + String(sweepTimeMs / 1000) + "<br>";
+      html += "Timeout: " + String(sweepTimeoutMs / 1000) + "<br>";
+      html += "IP-address: " + WiFi.softAPIP().toString() + "</p>";
+      html += "</body></html>";
+      server.send(200, "text/html", html);
+    }
+  });
+
   server.begin();
 }
