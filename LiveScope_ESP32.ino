@@ -235,7 +235,7 @@ double shortestAngle(double target, double current) {
 }
 
 // ========= COMPASS/MAGNETOMETER =========
-/* void updateHeading() {
+void updateHeading() {
   if (!useMagnetometer) return;
   sensors_event_t event;
   static int failCount = 0;
@@ -264,7 +264,7 @@ double shortestAngle(double target, double current) {
   if (filteredHeading >= 360) filteredHeading -= 360;
 
   currentHeading = filteredHeading;
-} */
+}
 
 //-------------------------------
 // NEW COMPASS CALIBRATION
