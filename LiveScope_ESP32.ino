@@ -235,7 +235,7 @@ double shortestAngle(double target, double current) {
 }
 
 // ========= COMPASS/MAGNETOMETER =========
-void updateHeading() {
+/* void updateHeading() {
   if (!useMagnetometer) return;
   sensors_event_t event;
   static int failCount = 0;
@@ -264,6 +264,140 @@ void updateHeading() {
   if (filteredHeading >= 360) filteredHeading -= 360;
 
   currentHeading = filteredHeading;
+} */
+
+//-------------------------------
+// NEW COMPASS CALIBRATION
+//-------------------------------
+// ---------------------------------------------------
+//   COMPASS CALIBRATION ROUTINE
+//   - Checks heading jumps / out-of-range
+//   - Determines motor direction (forward=RIGHT or LEFT)
+//   - Allows custom speed and margin (call with args)
+//   - Rotates max 360° + extra margin (default 90°)
+//   - Moves back to starting heading
+//   - Stores direction in EEPROM
+// ---------------------------------------------------
+void calibrateCompass(int calibSpeed = 50, int extraMargin = 90) {
+  Serial.println("[CALIBRATION] === Compass calibration started ===");
+  Serial.print("[CALIBRATION] Calibration speed: "); Serial.println(calibSpeed);
+  Serial.print("[CALIBRATION] Max allowed rotation: 360 + "); Serial.print(extraMargin); Serial.println(" degrees");
+
+  // 1. Get current heading
+  updateHeading();
+  double startHeading = currentHeading;
+  Serial.print("[CALIBRATION] Start heading: "); Serial.println(startHeading, 2);
+
+  double lastHeading = startHeading;
+  int headingJumpCount = 0;
+  int headingOutOfRangeCount = 0;
+  bool headingValid = true;
+  double headingMin = startHeading;
+  double headingMax = startHeading;
+
+  // 2. Move motor forward (direction 1), track heading, log jumps
+  double maxAllowedDelta = 360.0 + extraMargin;
+  double headingMoved = 0;
+  unsigned long startTime = millis();
+  unsigned long lastLog = millis();
+
+  Serial.println("[CALIBRATION] Moving motor FORWARD...");
+
+  while (fabs(headingMoved) < maxAllowedDelta && millis() - startTime < 12000) { // Max 12s
+    motorForward(calibSpeed);
+    delay(10);
+    updateHeading();
+
+    // Heading difference (wrap-safe)
+    double delta = shortestAngle(currentHeading, lastHeading);
+    if (fabs(delta) > 30.0) {
+      headingJumpCount++;
+      Serial.print("[CALIBRATION][WARN] Heading jump detected: "); Serial.println(delta, 2);
+    }
+
+    // Track heading min/max
+    headingMin = min(headingMin, currentHeading);
+    headingMax = max(headingMax, currentHeading);
+
+    // Out of range if heading leaves 0-360 (should never happen)
+    if (currentHeading < -10 || currentHeading > 370) {
+      headingOutOfRangeCount++;
+    }
+
+    headingMoved = fabs(shortestAngle(currentHeading, startHeading));
+    lastHeading = currentHeading;
+    if (millis() - lastLog > 500) {
+      Serial.print("[CALIBRATION] Current heading: "); Serial.println(currentHeading, 2);
+      Serial.print("[CALIBRATION] Delta vs start: "); Serial.println(headingMoved, 2);
+      lastLog = millis();
+    }
+
+    if (headingJumpCount > 3 || headingOutOfRangeCount > 2) {
+      Serial.println("[CALIBRATION][ERROR] Too many heading jumps/out-of-range! Calibration aborted.");
+      headingValid = false;
+      break;
+    }
+  }
+  stopAllMotors();
+  delay(600);
+
+  // 3. Analyze heading change
+  updateHeading();
+  double endHeading = currentHeading;
+  Serial.print("[CALIBRATION] End heading: "); Serial.println(endHeading, 2);
+
+  double deltaHeading = shortestAngle(endHeading, startHeading);
+  Serial.print("[CALIBRATION] Total heading delta: "); Serial.println(deltaHeading, 2);
+
+  int testDirection = 1;
+  if (!headingValid) {
+    Serial.println("[CALIBRATION][FAIL] Heading error - check magnetometer.");
+    return;
+  }
+  if (fabs(deltaHeading) < 40) {
+    Serial.println("[CALIBRATION][FAIL] Not enough heading change - check sensor.");
+    return;
+  }
+
+  if (deltaHeading > 0) {
+    testDirection = 1; // Forward increases heading (RIGHT)
+    Serial.println("[CALIBRATION] Motor forward = heading increases (RIGHT)");
+  } else {
+    testDirection = -1; // Forward decreases heading (LEFT)
+    Serial.println("[CALIBRATION] Motor forward = heading decreases (LEFT)");
+  }
+
+  // 4. Return to starting point
+  Serial.println("[CALIBRATION] Returning motor to starting heading...");
+  unsigned long backStart = millis();
+  double headingBack = shortestAngle(currentHeading, startHeading);
+  int backTimeout = 0;
+  while (fabs(headingBack) > 5 && backTimeout < 300) { // Max ~3s
+    motorBackward(calibSpeed * testDirection); // Reverse direction
+    delay(10);
+    updateHeading();
+    headingBack = shortestAngle(currentHeading, startHeading);
+    backTimeout++;
+  }
+  stopAllMotors();
+  delay(500);
+  updateHeading();
+  Serial.print("[CALIBRATION] Final heading after return: "); Serial.println(currentHeading, 2);
+
+  // 5. Store direction in EEPROM
+  EEPROM.put(20, testDirection);
+#if IS_ESP32
+  EEPROM.commit();
+#endif
+  Serial.print("[CALIBRATION] Motor direction calibrated and stored: ");
+  Serial.println(testDirection);
+
+  Serial.println("[CALIBRATION] === Report ===");
+  Serial.print("[CALIBRATION] Heading min: "); Serial.println(headingMin, 2);
+  Serial.print("[CALIBRATION] Heading max: "); Serial.println(headingMax, 2);
+  Serial.print("[CALIBRATION] Heading jumps: "); Serial.println(headingJumpCount);
+  Serial.println("[CALIBRATION] If you see >3 jumps, check for interference or sensor wiring.");
+  Serial.println("[CALIBRATION] Complete!");
 }
 
 // ========= SWEEP MODE =========
@@ -430,10 +564,18 @@ void runManualMode() {
 
 // ========= COMMAND HANDLING (BLUETOOTH / APP / WIFI) =========
 void handleAppCommand(String cmd) {
-  cmd.trim(); cmd.toUpperCase();
-  if (cmd == "RIGHT")      { motorForward(motorSpeed); }
-  else if (cmd == "LEFT")  { motorBackward(motorSpeed); }
-  else if (cmd == "STOP")  { motorStop(); }
+  cmd.trim(); 
+  cmd.toUpperCase();
+
+  if (cmd == "RIGHT") {
+    motorForward(motorSpeed);
+  }
+  else if (cmd == "LEFT") {
+    motorBackward(motorSpeed);
+  }
+  else if (cmd == "STOP") {
+    motorStop();
+  }
   else if (cmd.startsWith("SPEED=")) {
     int s = cmd.substring(6).toInt();
     saveSpeed(s);
@@ -451,11 +593,24 @@ void handleAppCommand(String cmd) {
   else if (cmd == "SPEEDMENU") {
     mainState = SPEED_MENU;
   }
-  else if (cmd.startsWith("KP=")) { Kp = cmd.substring(3).toFloat(); savePIDValues(); }
-  else if (cmd.startsWith("KI=")) { Ki = cmd.substring(3).toFloat(); savePIDValues(); }
-  else if (cmd.startsWith("KD=")) { Kd = cmd.substring(3).toFloat(); savePIDValues(); }
+  else if (cmd.startsWith("KP=")) {
+    Kp = cmd.substring(3).toFloat();
+    savePIDValues();
+  }
+  else if (cmd.startsWith("KI=")) {
+    Ki = cmd.substring(3).toFloat();
+    savePIDValues();
+  }
+  else if (cmd.startsWith("KD=")) {
+    Kd = cmd.substring(3).toFloat();
+    savePIDValues();
+  }
+  else if (cmd == "CALIBRATE") {
+    calibrateCompass(); // Run the calibration routine
+  }
   // Add more commands as needed
 }
+
 
 // ========= SETUP =========
 void setup() {
