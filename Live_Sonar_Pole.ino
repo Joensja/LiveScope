@@ -900,7 +900,7 @@ void handleSerialCommand(char command) {
 // ----------------------------
 // Function to calibrate motor direction for compass mode
 // This function runs a short motor movement and checks which direction reduces the error to the set heading.
-void calibrateCompassMotorDirection() {
+/*void calibrateCompassMotorDirection() {
     int testDirection = 1; // Default value
     Serial.println(F("=== Calibrating motor direction (compass) ==="));
     updateHeading();
@@ -955,6 +955,139 @@ void calibrateCompassMotorDirection() {
     } else {
         Serial.println(F("Motor 1 = LEFT (decreases heading)"));
     }
+}*/
+
+// -----------------------------------------------
+// NEW COMPASS CALIBRATION 
+//------------------------------------------------
+// ----------------------------
+//   COMPASS CALIBRATION 
+//   Enhanced: checks heading, direction, sets speed, limits rotation, logs issues
+// ----------------------------
+void calibrateCompassMotorDirection(int calibSpeed = 50, int extraMargin = 90) {
+    Serial.println(F("=== COMPASS + MOTOR DIRECTION CALIBRATION ==="));
+    Serial.print(F("Calibration speed: ")); Serial.println(calibSpeed);
+    Serial.print(F("Max degrees allowed: 360 + ")); Serial.println(extraMargin);
+    delay(800);
+
+    // 1. Get current heading
+    updateHeading();
+    double startHeading = currentHeading;
+    Serial.print(F("Start Heading: "));
+    Serial.println(startHeading, 2);
+
+    double lastHeading = startHeading;
+    int headingJumpCount = 0;
+    int headingOutOfRangeCount = 0;
+    bool headingValid = true;
+    double headingMin = startHeading;
+    double headingMax = startHeading;
+
+    // 2. Move motor forward (direction 1), log heading, check jumps
+    double maxAllowedDelta = 360.0 + extraMargin;
+    double headingMoved = 0;
+    unsigned long startTime = millis();
+    unsigned long lastLog = millis();
+    Serial.println(F("Moving motor FORWARD..."));
+
+    while (fabs(headingMoved) < maxAllowedDelta && millis() - startTime < 12000) { // Max 12s for safety
+        controlMotor(1, calibSpeed);
+        delay(10);
+        updateHeading();
+
+        // Heading difference (wrap safe)
+        double delta = shortestAngle(currentHeading, lastHeading);
+        if (fabs(delta) > 30.0) {
+            headingJumpCount++;
+            Serial.print(F("[WARN] Heading jump detected: "));
+            Serial.println(delta, 2);
+        }
+
+        // Track heading min/max
+        headingMin = min(headingMin, currentHeading);
+        headingMax = max(headingMax, currentHeading);
+
+        // Out of range if heading leaves 0-360 (should never happen)
+        if (currentHeading < -10 || currentHeading > 370) {
+            headingOutOfRangeCount++;
+        }
+
+        headingMoved = fabs(shortestAngle(currentHeading, startHeading));
+
+        lastHeading = currentHeading;
+        if (millis() - lastLog > 500) {
+            Serial.print(F("Current heading: ")); Serial.println(currentHeading, 2);
+            Serial.print(F("Delta vs start: ")); Serial.println(headingMoved, 2);
+            lastLog = millis();
+        }
+
+        if (headingJumpCount > 3 || headingOutOfRangeCount > 2) {
+            Serial.println(F("[ERROR] Too many heading jumps or out-of-range values! Calibration aborted."));
+            headingValid = false;
+            break;
+        }
+    }
+    stopAllMotors();
+    delay(600);
+
+    // 3. Analyze heading change
+    updateHeading();
+    double endHeading = currentHeading;
+    Serial.print(F("End Heading: ")); Serial.println(endHeading, 2);
+
+    double deltaHeading = shortestAngle(endHeading, startHeading);
+    Serial.print(F("Total heading delta: ")); Serial.println(deltaHeading, 2);
+
+    int testDirection = 1;
+    if (!headingValid) {
+        Serial.println(F("Calibration failed due to heading errors! Check magnetometer and try again."));
+        return;
+    }
+    if (fabs(deltaHeading) < 40) {
+        Serial.println(F("Calibration failed! Not enough heading change. Is the compass working?"));
+        return;
+    }
+
+    if (deltaHeading > 0) {
+        testDirection = 1; // Motor direction 1 increases heading (right)
+        Serial.println(F("Direction: Motor forward = heading increases (RIGHT)"));
+    } else {
+        testDirection = -1; // Motor direction 1 decreases heading (left)
+        Serial.println(F("Direction: Motor forward = heading decreases (LEFT)"));
+    }
+
+    // 4. Move back toward starting point (never more than allowed)
+    Serial.println(F("Returning motor to starting heading..."));
+    unsigned long backStart = millis();
+    double headingBack = shortestAngle(currentHeading, startHeading);
+    int backTimeout = 0;
+
+    while (fabs(headingBack) > 5 && backTimeout < 300) { // Max ~3s
+        controlMotor(-testDirection, calibSpeed);
+        delay(10);
+        updateHeading();
+        headingBack = shortestAngle(currentHeading, startHeading);
+        backTimeout++;
+    }
+    stopAllMotors();
+    delay(500);
+    updateHeading();
+    Serial.print(F("Final Heading after return: ")); Serial.println(currentHeading, 2);
+
+    // 5. Store direction in EEPROM
+    EEPROM.put(20, testDirection);
+#if IS_ESP32
+    EEPROM.commit();
+#endif
+    Serial.print(F("Motor Direction Calibrated and stored: "));
+    Serial.println(testDirection);
+
+    Serial.println(F("=== CALIBRATION REPORT ==="));
+    Serial.print(F("Heading min: ")); Serial.println(headingMin, 2);
+    Serial.print(F("Heading max: ")); Serial.println(headingMax, 2);
+    Serial.print(F("Heading jumps: ")); Serial.println(headingJumpCount);
+    Serial.println(F("If you see jumps >3 or range error: Check for interference or sensor wiring."));
+    Serial.println(F("Calibration complete!"));
 }
 
 
