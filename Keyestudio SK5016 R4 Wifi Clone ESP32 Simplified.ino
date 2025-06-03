@@ -50,8 +50,8 @@
 #include <HTTPUpdateServer.h>
 
 // =================== WIFI SETTINGS ===================
-const char* ssid = "WLi-Transducer_Pole";
-const char* password = "123456789";
+const char* ssid = "WLi Transducer Pole";
+//const char* password = "123456789";
 WebServer server(80);
 
 // =================== PIN DEFINITIONS ===================
@@ -522,12 +522,6 @@ void setup() {
   pinMode(pedalButton, INPUT_PULLUP);
   pinMode(hallSensorPin, INPUT_PULLUP);
 
-  for (int i = 0; i < 20; i++) {
-    int hallRaw = digitalRead(hallSensorPin);
-    Serial.printf("KY-003 Startup check #%d: %d\n", i, hallRaw);
-    delay(250);
-  }
-
   ledcAttach(EN, pwmFreq, pwmResolution);
   motorStop();
 
@@ -535,38 +529,393 @@ void setup() {
   if (savedSpeed >= 75 && savedSpeed <= 250) motorSpeed = savedSpeed;
   else motorSpeed = 125;
 
-  WiFi.softAP(ssid, password);
+  WiFi.softAP(ssid);
   WiFi.setSleep(false);
   IPAddress IP = WiFi.softAPIP();
   Serial.print("Access Point started! IP: "); Serial.println(IP);
     if (!MDNS.begin("esp32")) {  // "esp32" kan du byta till valfritt namn
     Serial.println("Error setting up MDNS responder!");
   }
-  httpUpdater.setup(&server);
-  Serial.println("OTA-update ready! Besök http://" + WiFi.softAPIP().toString() + "/update");
+ //httpUpdater.setup(&server);
+server.on("/update", HTTP_GET, []() {
+  String html = R"rawliteral(
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta name='viewport' content='width=device-width, initial-scale=1'>
+      <title>OTA Update | WLi Transducer Pole</title>
+      <style>
+        body {
+          background: #1a1a22;
+          color: #e5e5f7;
+          font-family: 'Segoe UI', 'Arial', sans-serif;
+          display: flex;
+          min-height: 100vh;
+          align-items: center;
+          justify-content: center;
+        }
+        .container {
+          background: #26263a;
+          padding: 2.2rem 2.5rem 2rem 2.5rem;
+          border-radius: 1.6rem;
+          box-shadow: 0 2px 24px 0 #0008;
+          min-width: 350px;
+          max-width: 430px;
+          text-align: center;
+        }
+        h3 {
+          margin-bottom: 1.2rem;
+          color: #b7cdfa;
+        }
+        form {
+          margin-bottom: 1.2rem;
+        }
+        input[type='file'] {
+          display: block;
+          margin: 1.2rem auto 1rem auto;
+          color: #dbeafe;
+          background: #16162a;
+          border-radius: 1rem;
+          padding: 0.7rem;
+        }
+        .submit-btn {
+          background: #4684d8;
+          color: #fff;
+          border: none;
+          border-radius: 1rem;
+          font-size: 1.13rem;
+          padding: 0.7rem 2.5rem;
+          box-shadow: 0 2px 12px 0 #0004;
+          cursor: pointer;
+          transition: background 0.12s;
+        }
+        .submit-btn:active {
+          background: #345e94;
+        }
+        .status {
+          margin-top: 1rem;
+          color: #b2ecff;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h3>OTA Update<br>WLi Transducer Pole</h3>
+        <form method='POST' action='/update' enctype='multipart/form-data'>
+          <input type='file' name='update' required>
+          <br>
+          <button class='submit-btn' type='submit'>Upload & Update</button>
+        </form>
+        <div class='status'>Upload a new .bin file to update the firmware.</div>
+      </div>
+    </body>
+    </html>
+  )rawliteral";
+  server.send(200, "text/html", html);
+});
 
+// This part actually handles the firmware upload and flashing!
+server.on("/update", HTTP_POST, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/html", "<html><body><h3>Update Success!</h3><p>The device will restart automatically.</p></body></html>");
+    delay(1000);
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.setDebugOutput(true);
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+      } else {
+        Update.printError(Serial);
+      }
+      Serial.setDebugOutput(false);
+    }
+  }
+);
+  Serial.println("OTA-update ready! Besök http://" + WiFi.softAPIP().toString() + "/update");
 
   // --------- ENDPOINTS ----------
 
-  // Web-status som innan
 server.on("/", []() {
-  String html = "<html><body>";
-  html += "<h3>ESP32 Motor Control</h3>";
-  html += "<form action='/set' method='get'>";
-  html += "Speed (75-250): <input type='number' name='speed' value='" + String(motorSpeed) + "' min='75' max='250'><br>";
-  html += "Sweep mode: <select name='mode'>";
-  html += "<option value='TIME'" + String(sweepModeType == SWEEP_TIME ? " selected" : "") + ">TIME</option>";
-  html += "<option value='SWITCH'" + String(sweepModeType == SWEEP_SWITCH ? " selected" : "") + ">SWITCH</option>";
-  html += "</select><br>";
-  html += "Sweep time (sek): <input type='number' name='sweeptime' value='" + String(sweepTimeMs / 1000) + "' min='1' max='30'><br>";
-  html += "Timeout (sek): <input type='number' name='timeout' value='" + String(sweepTimeoutMs / 1000) + "' min='1' max='60'><br>";
-  html += "<input type='submit' value='Save settings'>";
-  html += "</form>";
-  html += "<hr><a href='/LEFT'>Turn lrft</a> | <a href='/RIGHT'>Turn right</a> | <a href='/STOP'>Stopp</a>";
-  html += "<p>Current speed: " + String(motorSpeed) + "</p>";
-  html += "</body></html>";
+  String html = R"rawliteral(
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta name='viewport' content='width=device-width, initial-scale=1'>
+      <title>WLi Transducer Pole</title>
+      <style>
+        body {
+          background: #1a1a22;
+          color: #e5e5f7;
+          font-family: 'Segoe UI', 'Arial', sans-serif;
+          display: flex;
+          min-height: 100vh;
+          align-items: center;
+          justify-content: center;
+        }
+        .container {
+          background: #26263a;
+          padding: 2.2rem 2.5rem 2rem 2.5rem;
+          border-radius: 1.6rem;
+          box-shadow: 0 2px 24px 0 #0008;
+          min-width: 450px;
+          max-width: 600px;
+          text-align: center;
+        }
+        h3 {
+          margin-bottom: 1.5rem;
+          color: #b7cdfa;
+          letter-spacing: 1px;
+        }
+        form {
+          margin-bottom: 1.2rem;
+        }
+        .group {
+          margin-bottom: 1.1rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.5rem;
+        }
+        .label {
+          flex: 1 0 110px;
+          text-align: right;
+          margin-right: 0.5rem;
+          color: #dbeafe;
+          font-size: 1rem;
+        }
+        .stepper {
+          display: flex;
+          align-items: center;
+        }
+        .step-btn {
+          background: #232342;
+          color: #89a7d9;
+          border: none;
+          border-radius: 0.8rem;
+          font-size: 1.1rem;
+          width: 2.2rem;
+          height: 2.2rem;
+          cursor: pointer;
+          transition: background 0.1s;
+        }
+        .control-btn {
+          background: #232342;
+          color: #92e0c9;
+          border: none;
+          border-radius: 0.8rem;
+          font-size: 1.13rem;
+          min-width: 95px;
+          padding: 0.5rem 0.5rem;
+          margin: 0 0.18rem;
+          cursor: pointer;
+          transition: background 0.11s;
+          display: inline-block;
+        }
+        .control-btn:active {
+          background: #214a5c;
+        }
+        .controls {
+          display: flex;
+          justify-content: center;
+          gap: 0.5rem;
+          margin-bottom: 0.2rem;
+          flex-wrap: wrap;
+        }
+
+        .step-btn:active {
+          background: #2e4368;
+        }
+        .step-input {
+          background: #16162a;
+          border: none;
+          border-radius: 0.5rem;
+          color: #fff;
+          font-size: 1.1rem;
+          width: 3.1rem;
+          text-align: center;
+          margin: 0 0.3rem;
+          padding: 0.3rem 0.1rem;
+        }
+        select, .step-input {
+          outline: none;
+        }
+        select {
+          background: #16162a;
+          color: #d6e7ff;
+          border-radius: 0.7rem;
+          border: none;
+          font-size: 1rem;
+          padding: 0.3rem 1.1rem;
+        }
+        .submit-btn {
+          margin-top: 1.2rem;
+          background: #4684d8;
+          color: #fff;
+          border: none;
+          border-radius: 1rem;
+          font-size: 1.1rem;
+          padding: 0.65rem 2rem;
+          box-shadow: 0 2px 12px 0 #0004;
+          cursor: pointer;
+          transition: background 0.12s;
+        }
+        .submit-btn:active {
+          background: #345e94;
+        }
+        hr {
+          border: none;
+          height: 1px;
+          background: #445;
+          margin: 1.3rem 0 1.2rem 0;
+        }
+        .controls a {
+          color: #92e0c9;
+          background: #2c2c43;
+          padding: 0.42rem 1.1rem;
+          border-radius: 0.8rem;
+          margin: 0 0.25rem;
+          text-decoration: none;
+          font-size: 1.06rem;
+          transition: background 0.11s;
+        }
+        .controls a:hover {
+          background: #214a5c;
+        }
+        .status {
+          color: #b2ecff;
+          margin-top: 0.7rem;
+          font-size: 1.01rem;
+        }
+        @media (max-width: 480px) {
+          .container { padding: 1.2rem; min-width: unset; }
+          h3 { font-size: 1.2rem; }
+        }
+        .search-controls {
+        display: flex;
+        justify-content: center;
+        gap: 1rem;
+        margin-top: 1.1rem;
+      }
+      .search-btn {
+        background: #4287f5;
+        color: #fff;
+        border: none;
+        border-radius: 1.2rem;
+        font-size: 1.22rem;
+        min-width: 180px;
+        padding: 1rem 1.1rem;
+        margin: 0 0.2rem;
+        cursor: pointer;
+        font-weight: 600;
+        box-shadow: 0 2px 10px 0 #0004;
+        transition: background 0.11s, transform 0.08s;
+        display: inline-block;
+      }
+      .search-btn:active {
+        background: #27518a;
+        transform: scale(0.97);
+      }
+
+      </style>
+      <script>
+        // Simple stepper for each parameter
+        function step(id, min, max, step, dir) {
+          let inp = document.getElementById(id);
+          let v = parseInt(inp.value);
+          if (isNaN(v)) v = min;
+          v += step * dir;
+          if (v < min) v = min;
+          if (v > max) v = max;
+          inp.value = v;
+        }
+
+        // New: send command without reloading page
+        function sendCmd(cmd) {
+          fetch('/' + cmd)
+            .then(r => r.text())
+            .then(txt => {
+              let stat = document.querySelector('.status');
+              if(stat) stat.innerHTML = txt;
+            });
+        }
+      </script>
+
+    </head>
+    <body>
+      <div class="container">
+        <h3>Wli Transducer Pole</h3>
+        <form action='/set' method='get' autocomplete="off">
+          <div class="group">
+            <span class="label">Motor Speed:</span>
+            <span class="stepper">
+              <button type="button" class="step-btn" onclick="step('speed',75,250,25,-1)">-</button>
+              <input class="step-input" readonly id="speed" name="speed" value="%SPEED%" min="75" max="250">
+              <button type="button" class="step-btn" onclick="step('speed',75,250,25,1)">+</button>
+            </span>
+          </div>
+          <div class="group">
+            <span class="label">Sweep Time (sec):</span>
+            <span class="stepper">
+              <button type="button" class="step-btn" onclick="step('sweeptime',1,6,1,-1)">-</button>
+              <input class="step-input" readonly id="sweeptime" name="sweeptime" value="%SWEEPTIME%" min="1" max="6">
+              <button type="button" class="step-btn" onclick="step('sweeptime',1,6,1,1)">+</button>
+            </span>
+          </div>
+          <div class="group">
+            <span class="label">Timeout (sec):</span>
+            <span class="stepper">
+              <button type="button" class="step-btn" onclick="step('timeout',1,8,1,-1)">-</button>
+              <input class="step-input" readonly id="timeout" name="timeout" value="%TIMEOUT%" min="1" max="8">
+              <button type="button" class="step-btn" onclick="step('timeout',1,8,1,1)">+</button>
+            </span>
+          </div>
+          <div class="group">
+            <span class="label">Sweep Mode:</span>
+            <select name="mode">
+              <option value="TIME"%SEL_TIME%>Time</option>
+              <option value="SWITCH"%SEL_SWITCH%>Switch</option>
+            </select>
+          </div>
+          <button class="submit-btn" type="submit">Save Settings</button>
+        </form>
+        <hr>
+        <div class="controls">
+          <button type="button" class="control-btn" onclick="sendCmd('LEFT')">&larr; Left</button>
+          <button type="button" class="control-btn" onclick="sendCmd('STOP')">Stop</button>
+          <button type="button" class="control-btn" onclick="sendCmd('RIGHT')">Right &rarr;</button>
+        </div>
+        <div class="search-controls">
+          <button type="button" class="search-btn" onclick="sendCmd('SWEEP_START')">Start Search mode</button>
+          <button type="button" class="search-btn" onclick="sendCmd('SWEEP_STOP')">Stop Search mode</button>
+        </div>
+        <div class="status">
+          Current speed: <b>%SPEED%</b>
+        </div>
+      </div>
+    </body>
+    </html>
+  )rawliteral";
+
+  // Insert values into template
+  html.replace("%SPEED%", String(motorSpeed));
+  html.replace("%SWEEPTIME%", String(sweepTimeMs / 1000));
+  html.replace("%TIMEOUT%", String(sweepTimeoutMs / 1000));
+  html.replace("%SEL_TIME%", (sweepModeType == SWEEP_TIME) ? " selected" : "");
+  html.replace("%SEL_SWITCH%", (sweepModeType == SWEEP_SWITCH) ? " selected" : "");
+
   server.send(200, "text/html", html);
 });
+
 
 server.on("/set", []() {
   if (server.hasArg("speed")) {
@@ -607,6 +956,18 @@ server.on("/set", []() {
   server.on("/STOP", []() {
     motorStop();
     server.send(200, "text/plain", "Idle!");
+  });
+  // Start Search mode (Sweep mode)
+  server.on("/SWEEP_START", []() {
+    mainState = SWEEP_MODE;
+    server.send(200, "text/plain", "Search mode activated!");
+  });
+
+  // Stop Search mode (Back to manual)
+  server.on("/SWEEP_STOP", []() {
+    mainState = MANUAL_MODE;
+    motorStop();
+    server.send(200, "text/plain", "Search mode stopped.");
   });
 
   // Sätt hastighet: t.ex. /SPEED=200
