@@ -5,6 +5,10 @@
   NOTE!!!!
   I NEVER GOT THE KY003 TO WORK ON THE KEYESTUDIOS SK5016 ESP32-WROOM-32 UNIT WITH THE L298NH MOTOR SHIELD. 
   I USED A MAGNETIC SWITCH INSTEAD ON THE INPUT FOR POSSW INSTEAD WORKS PERFECTLY!!
+
+  TESTED WITH:
+  * kEYESTUDIO SK5016
+  * WEMOS D1 R32
   //-----------------------------------------------------------------------------
 
   This code controls a motor using an ESP32, with input from physical buttons and a web interface.
@@ -556,10 +560,10 @@ server.on("/", []() {
   html += "</select><br>";
   html += "Sweep time (sek): <input type='number' name='sweeptime' value='" + String(sweepTimeMs / 1000) + "' min='1' max='30'><br>";
   html += "Timeout (sek): <input type='number' name='timeout' value='" + String(sweepTimeoutMs / 1000) + "' min='1' max='60'><br>";
-  html += "<input type='submit' value='Spara inställningar'>";
+  html += "<input type='submit' value='Save settings'>";
   html += "</form>";
-  html += "<hr><a href='/LEFT'>Kör vänster</a> | <a href='/RIGHT'>Kör höger</a> | <a href='/STOP'>Stopp</a>";
-  html += "<p>Aktuell hastighet: " + String(motorSpeed) + "</p>";
+  html += "<hr><a href='/LEFT'>Turn lrft</a> | <a href='/RIGHT'>Turn right</a> | <a href='/STOP'>Stopp</a>";
+  html += "<p>Current speed: " + String(motorSpeed) + "</p>";
   html += "</body></html>";
   server.send(200, "text/html", html);
 });
@@ -590,19 +594,19 @@ server.on("/set", []() {
   // Motor åt höger
   server.on("/RIGHT", []() {
     motorForward(motorSpeed);
-    server.send(200, "text/plain", "Motor åt höger! Speed: " + String(motorSpeed));
+    server.send(200, "text/plain", "Turning right! Speed: " + String(motorSpeed));
   });
 
   // Motor åt vänster
   server.on("/LEFT", []() {
     motorBackward(motorSpeed);
-    server.send(200, "text/plain", "Motor åt vänster! Speed: " + String(motorSpeed));
+    server.send(200, "text/plain", "Turning left! Speed: " + String(motorSpeed));
   });
 
   // Stoppa motorn
   server.on("/STOP", []() {
     motorStop();
-    server.send(200, "text/plain", "Motor stoppad!");
+    server.send(200, "text/plain", "Idle!");
   });
 
   // Sätt hastighet: t.ex. /SPEED=200
@@ -612,20 +616,20 @@ server.on("/set", []() {
       int speed = uri.substring(7).toInt();
       if (speed >= 75 && speed <= 250) {
         saveSpeed(speed);
-        server.send(200, "text/plain", "OK: Hastighet satt till " + String(motorSpeed));
+        server.send(200, "text/plain", "OK: Speed set to " + String(motorSpeed));
       } else {
-        server.send(400, "text/plain", "Felaktig hastighet! (75-250)");
+        server.send(400, "text/plain", "Speed setting incorrect! (75-250)");
       }
     } else if (uri.startsWith("/SWEEPTIME=")) {
       setSweepTimeFromApp(uri.substring(11));
-      server.send(200, "text/plain", "Sveptid satt till " + String(sweepTimeMs/1000) + " sek");
+      server.send(200, "text/plain", "Sweep time set to " + String(sweepTimeMs/1000) + " sek");
     } else if (uri.startsWith("/TIMEOUT=")) {
       setTimeoutFromApp(uri.substring(9));
-      server.send(200, "text/plain", "Timeout satt till " + String(sweepTimeoutMs/1000) + " sek");
+      server.send(200, "text/plain", "Sweep timeout set to " + String(sweepTimeoutMs/1000) + " sek");
     } else if (uri.startsWith("/SWEEP")) {
       // Starta sweepmode vid app-kommando
       mainState = SWEEP_MODE;
-      server.send(200, "text/plain", "Sweep-läge aktiverat!");
+      server.send(200, "text/plain", "Search mode activated!");
     } else {
       // "status" - hämta aktuell status
       String html = "<html><body>";
