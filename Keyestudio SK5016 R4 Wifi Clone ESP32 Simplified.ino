@@ -939,17 +939,20 @@ server.on("/set", []() {
   server.send(303);
 });
 
-
   // Motor åt höger
   server.on("/RIGHT", []() {
     motorForward(motorSpeed);
-    server.send(200, "text/plain", "Turning right! Speed: " + String(motorSpeed));
+    delay(500);
+    motorStop();
+    server.send(200, "text/plain", "Moved right for 500 ms");
   });
 
   // Motor åt vänster
   server.on("/LEFT", []() {
     motorBackward(motorSpeed);
-    server.send(200, "text/plain", "Turning left! Speed: " + String(motorSpeed));
+    delay(500);
+    motorStop();
+    server.send(200, "text/plain", "Moved left for 500 ms");
   });
 
   // Stoppa motorn
