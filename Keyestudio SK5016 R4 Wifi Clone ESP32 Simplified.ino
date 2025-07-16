@@ -66,10 +66,10 @@ const int hallSensorPin = 33;
 
 // =================== GLOBAL VARIABLES ===================
 const int referencePWM = 250;
-int motorSpeed = 125;
+int motorSpeed = 150;
 int lastDirection = 1;
 bool useHallSensor = false;
-unsigned long sweepTimeoutMs = 6000;
+unsigned long sweepTimeoutMs = 8000;
 unsigned long sweepTimeMs = 4000;
 const int pwmFreq = 1000;
 const int pwmResolution = 8; // 8-bit (0-255)
